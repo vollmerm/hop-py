@@ -58,70 +58,74 @@ def _build_cfg_block(
     while i < len(stmts):
         stmt = stmts[i]
         t = stmt.type
-        if t == NodeType.IF_STMT:
-            # End current block at the if
-            then_label = fresh_label(label_counter)
-            else_label = fresh_label(label_counter) if stmt.else_block else None
-            after_label = fresh_label(label_counter)
-            # Add the if statement as a terminator
-            cur_block["statements"].append(stmt)
-            cur_block["out_edges"].append(then_label)
-            if else_label:
-                cur_block["out_edges"].append(else_label)
-            else:
-                cur_block["out_edges"].append(after_label)
-            # Then block
-            then_block = {"label": then_label, "statements": [], "out_edges": []}
-            blocks.append(then_block)
-            _build_cfg_block(stmt.then_block, then_block, blocks, label_counter)
-            then_block["out_edges"].append(after_label)
-            # Else block
-            if stmt.else_block:
-                else_block = {"label": else_label, "statements": [], "out_edges": []}
-                blocks.append(else_block)
-                _build_cfg_block(stmt.else_block, else_block, blocks, label_counter)
-                else_block["out_edges"].append(after_label)
-            # Continue after if
-            next_block = {"label": after_label, "statements": [], "out_edges": []}
-            blocks.append(next_block)
-            cur_block = next_block
-            i += 1
-        elif t == NodeType.WHILE_STMT:
-            # End current block at the while
-            cond_label = fresh_label(label_counter)
-            body_label = fresh_label(label_counter)
-            after_label = fresh_label(label_counter)
-            # Jump to condition
-            cur_block["out_edges"].append(cond_label)
-            # Condition block
-            cond_block = {"label": cond_label, "statements": [stmt], "out_edges": []}
-            blocks.append(cond_block)
-            cond_block["out_edges"].append(body_label)
-            cond_block["out_edges"].append(after_label)
-            # Body block
-            body_block = {"label": body_label, "statements": [], "out_edges": []}
-            blocks.append(body_block)
-            # Build the body and get the label of the block where the body falls through
-            body_exit_label = _build_cfg_block(
-                stmt.body, body_block, blocks, label_counter
-            )
-            # Attach loop-back edge from the body's exit block back to the condition
-            if body_exit_label is not None:
-                for blk in blocks:
-                    if blk["label"] == body_exit_label:
-                        blk["out_edges"].append(cond_label)
-                        break
-            # Continue after while
-            next_block = {"label": after_label, "statements": [], "out_edges": []}
-            blocks.append(next_block)
-            cur_block = next_block
-            i += 1
-        elif t == NodeType.RETURN_STMT:
-            cur_block["statements"].append(stmt)
-            # Return is a terminator; no out_edges
-            return cur_block["label"]
-        else:
-            cur_block["statements"].append(stmt)
-            i += 1
+        match t:
+            case NodeType.IF_STMT:
+                # End current block at the if
+                then_label = fresh_label(label_counter)
+                else_label = fresh_label(label_counter) if stmt.else_block else None
+                after_label = fresh_label(label_counter)
+                # Add the if statement as a terminator
+                cur_block["statements"].append(stmt)
+                cur_block["out_edges"].append(then_label)
+                if else_label:
+                    cur_block["out_edges"].append(else_label)
+                else:
+                    cur_block["out_edges"].append(after_label)
+                # Then block
+                then_block = {"label": then_label, "statements": [], "out_edges": []}
+                blocks.append(then_block)
+                _build_cfg_block(stmt.then_block, then_block, blocks, label_counter)
+                then_block["out_edges"].append(after_label)
+                # Else block
+                if stmt.else_block:
+                    else_block = {"label": else_label, "statements": [], "out_edges": []}
+                    blocks.append(else_block)
+                    _build_cfg_block(stmt.else_block, else_block, blocks, label_counter)
+                    else_block["out_edges"].append(after_label)
+                # Continue after if
+                next_block = {"label": after_label, "statements": [], "out_edges": []}
+                blocks.append(next_block)
+                cur_block = next_block
+                i += 1
+
+            case NodeType.WHILE_STMT:
+                # End current block at the while
+                cond_label = fresh_label(label_counter)
+                body_label = fresh_label(label_counter)
+                after_label = fresh_label(label_counter)
+                # Jump to condition
+                cur_block["out_edges"].append(cond_label)
+                # Condition block
+                cond_block = {"label": cond_label, "statements": [stmt], "out_edges": []}
+                blocks.append(cond_block)
+                cond_block["out_edges"].append(body_label)
+                cond_block["out_edges"].append(after_label)
+                # Body block
+                body_block = {"label": body_label, "statements": [], "out_edges": []}
+                blocks.append(body_block)
+                # Build the body and get the label of the block where the body falls through
+                body_exit_label = _build_cfg_block(
+                    stmt.body, body_block, blocks, label_counter
+                )
+                # Attach loop-back edge from the body's exit block back to the condition
+                if body_exit_label is not None:
+                    for blk in blocks:
+                        if blk["label"] == body_exit_label:
+                            blk["out_edges"].append(cond_label)
+                            break
+                # Continue after while
+                next_block = {"label": after_label, "statements": [], "out_edges": []}
+                blocks.append(next_block)
+                cur_block = next_block
+                i += 1
+
+            case NodeType.RETURN_STMT:
+                cur_block["statements"].append(stmt)
+                # Return is a terminator; no out_edges
+                return cur_block["label"]
+
+            case _:
+                cur_block["statements"].append(stmt)
+                i += 1
     # If we reach here, this block falls through
     return cur_block["label"]
