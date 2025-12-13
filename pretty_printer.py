@@ -16,6 +16,66 @@ from ast_nodes import *
 
 class PrettyPrinter:
     @staticmethod
+    def print_cfg(
+        cfg: dict, liveness: Optional[dict] = None, collapse_liveness: bool = False
+    ) -> str:
+        """Pretty print a CFG (as produced by build_cfg) and return as string.
+
+        If `liveness` is provided (mapping produced by `analyze_liveness`), the
+        printer will annotate each statement with its `live_in` and `live_out`
+        sets.
+        """
+        lines = []
+        blocks = cfg.get("blocks", [])
+        entry = cfg.get("entry")
+        exit_ = cfg.get("exit")
+        lines.append(f"CFG: entry={entry} exit={exit_}")
+        for block in blocks:
+            lbl = block["label"]
+            lines.append(f"  Block {lbl}:")
+            stmts = block.get("statements", [])
+            i = 0
+            instr_l = []
+            if liveness and lbl in liveness:
+                instr_l = liveness[lbl].get("instr_liveness", [])
+
+            def _fmt(s: set) -> str:
+                if not s:
+                    return "{}"
+                return "{" + ", ".join(sorted(s)) + "}"
+
+            while i < len(stmts):
+                stmt = stmts[i]
+                ast_str = PrettyPrinter.print_ast(stmt, indent=6)
+                for l in ast_str.splitlines():
+                    lines.append(f"    {l}")
+
+                # If we have liveness info and collapsing is requested, find a run of
+                # contiguous instructions that share identical liveness, and print
+                # the live sets once for the entire group.
+                if instr_l and i < len(instr_l):
+                    live_in, live_out = instr_l[i]
+                    if collapse_liveness:
+                        j = i + 1
+                        while j < len(instr_l) and instr_l[j] == instr_l[i]:
+                            j += 1
+                        # print live sets once for the group [i, j)
+                        lines.append(f"      live_in: {_fmt(live_in)}")
+                        lines.append(f"      live_out: {_fmt(live_out)}")
+                        if j - i > 1:
+                            lines.append(f"      (applies to {j-i} instructions above)")
+                        i = j
+                        continue
+                    else:
+                        lines.append(f"      live_in: {_fmt(live_in)}")
+                        lines.append(f"      live_out: {_fmt(live_out)}")
+
+                i += 1
+            out_edges = block.get("out_edges", [])
+            lines.append(f"    Out edges: {out_edges}")
+        return "\n".join(lines)
+
+    @staticmethod
     def print_ast(node: ASTNode, indent: int = 0, prefix: str = "") -> str:
         """Pretty print AST and return as string."""
         lines = []
@@ -184,3 +244,66 @@ class PrettyPrinter:
                 lines.append(f"{indent_str}{prefix}Unknown node type: {node_type}")
 
         return "\n".join(line for line in lines if line)  # Remove empty lines
+
+    @staticmethod
+    def print_surface(node: ASTNode) -> str:
+        """Return a compact, surface-syntax-like one-line representation of an AST node.
+
+        This is intended for use in visualizations (CFG cells) where a concise
+        expression/statement syntax is desirable (e.g. `tmp0 = tmp1 + tmp2`).
+        """
+        if node is None:
+            return ""
+
+        # Helpers
+        def _p(n: ASTNode) -> str:
+            return PrettyPrinter.print_surface(n) if isinstance(n, ASTNode) else str(n)
+
+        nt = node.type if isinstance(node, ASTNode) else None
+
+        match nt:
+            case NodeType.INT_LITERAL:
+                return str(node.value)
+            case NodeType.BOOL_LITERAL:
+                return "true" if node.value else "false"
+            case NodeType.IDENTIFIER:
+                return node.name
+            case NodeType.BINARY_OP:
+                # left op right
+                return f"{_p(node.left)} {node.operator} {_p(node.right)}"
+            case NodeType.UNARY_OP:
+                return f"{node.operator}{_p(node.right)}"
+            case NodeType.ARRAY_INDEX:
+                return f"{_p(node.array)}[{_p(node.index)}]"
+            case NodeType.FUNC_CALL:
+                fname = node.function.name if isinstance(node.function, IdentifierNode) else _p(node.function)
+                args = ", ".join(_p(a) for a in node.arguments)
+                return f"{fname}({args})"
+            case NodeType.ASSIGNMENT:
+                return f"{_p(node.left)} = {_p(node.right)}"
+            case NodeType.EXPR_STMT:
+                return _p(node.expression)
+            case NodeType.RETURN_STMT:
+                if node.expression:
+                    return f"return {_p(node.expression)}"
+                return "return"
+            case NodeType.VAR_DECL:
+                tname = getattr(node.var_type, "name", str(node.var_type)).lower() if node.var_type is not None else "var"
+                if node.init_value:
+                    return f"{tname} {node.var_name} = {_p(node.init_value)}"
+                return f"{tname} {node.var_name}"
+            case NodeType.WHILE_STMT:
+                return f"while ({_p(node.condition)})"
+            case NodeType.IF_STMT:
+                return f"if ({_p(node.condition)})"
+            case NodeType.FUNC_DECL:
+                args = ", ".join(node.arg_names) if node.arg_names else ""
+                return f"func {node.func_name}({args})"
+            case NodeType.BLOCK:
+                return "{...}"
+            case NodeType.PROGRAM:
+                return "<program>"
+            case _:
+                # Fallback to the verbose AST printer but collapse to single line
+                s = PrettyPrinter.print_ast(node)
+                return " ".join(line.strip() for line in s.splitlines())

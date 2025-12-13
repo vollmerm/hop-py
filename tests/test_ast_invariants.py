@@ -1,4 +1,4 @@
-from main import lex, parse_tokens
+from tests.utils import parse_text
 from ast_nodes import *
 from tokens import TokenType
 from pretty_printer import PrettyPrinter
@@ -6,7 +6,7 @@ from pretty_printer import PrettyPrinter
 
 def test_function_declaration_arg_lengths_and_body():
     src = "int f(int a, int b); int g(int x) { return x; }"
-    ast = parse_tokens(lex(src))
+    ast = parse_text(src)
     funcs = [s for s in ast.statements if isinstance(s, FunctionDeclarationNode)]
 
     # Prototype f: arg lengths should match and body is None
@@ -22,7 +22,7 @@ def test_function_declaration_arg_lengths_and_body():
 
 def test_identifier_function_flag_and_parameters_propagated_from_symbols():
     src = "int add(int a, int b); int call() { return add(1, 2); }"
-    ast = parse_tokens(lex(src))
+    ast = parse_text(src)
 
     # Find the function call inside call's body
     call_fn = next(
@@ -45,7 +45,7 @@ def test_identifier_function_flag_and_parameters_propagated_from_symbols():
 
 def test_array_index_and_assignment_ast_shape():
     src = "int[] arr; arr[0] = 10;"
-    ast = parse_tokens(lex(src))
+    ast = parse_text(src)
     prog = ast
     assert isinstance(prog, ProgramNode)
     assign_stmt = prog.statements[1]
@@ -59,7 +59,7 @@ def test_array_index_and_assignment_ast_shape():
 
 def test_pretty_printer_outputs_non_empty_strings():
     src = "int x = 5; int add(int a, int b) { return a + b; }"
-    ast = parse_tokens(lex(src))
+    ast = parse_text(src)
     s = PrettyPrinter.print_ast(ast)
     assert isinstance(s, str)
     assert len(s) > 0

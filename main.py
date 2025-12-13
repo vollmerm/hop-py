@@ -1,11 +1,19 @@
 from __future__ import annotations
-from typing import List
+from typing import List, Optional
 from lexer import Lexer
 from tokens import Token
 from ast_nodes import ASTNode, NodeType
 from parser import Parser
 from type_checker import TypeChecker
+
 from pretty_printer import PrettyPrinter
+from ast_flatten import flatten_program
+from cfg import build_cfg
+from liveness import analyze_liveness
+import json
+from typing import Optional
+from ast_json import ast_to_json
+from cfg_viz import write_and_render
 
 
 def lex(text: str) -> List[Token]:
@@ -20,98 +28,153 @@ def parse_tokens(tokens: List[Token]) -> ASTNode:
     return parser.parse()
 
 
-def parse_string(text: str) -> ASTNode:
-    """Parse string directly into AST."""
-    tokens = lex(text)
-    return parse_tokens(tokens)
+def process_program(
+    text: str,
+    *,
+    print_tokens: bool = False,
+    print_ast: bool = True,
+    print_flat: bool = True,
+    print_cfg_flag: bool = True,
+    show_liveness: bool = True,
+    collapse_liveness: bool = False,
+    dump_cfg_path: Optional[str] = None,
+    viz_path: Optional[str] = None,
+    viz_format: str = "svg",
+    viz_surface: bool = False,
+    viz_include_liveness: bool = True,
+) -> None:
+    """Process a single program: lex, parse, typecheck, flatten, build CFG and optionally print stages.
 
-
-def test_compiler_pipeline() -> None:
-    """Test the complete compiler pipeline."""
-    test_cases = [
-        # Simple assignment statement
-        "int x = 5;",
-        # While loop
-        "int i; while (i < 10) { i = i + 1; }",
-        # If statement
-        "int x; int y; if (x > 0) { y = 1; } else { y = -1; }",
-        # Complex program
-        """
-        int i = 0;
-        int sum = 0;
-        while (i < 10) {
-            if (i % 2 == 0) {
-                sum = sum + i;
-            }
-            i = i + 1;
-        }
-        """,
-        # Array operations
-        "int[] arr; arr[0] = 5;",
-        # Boolean operations
-        """
-        bool flag = true;
-        int i = 5;
-        bool result = flag && (i < 10);
-        """,
-        # Nested if-else
-        """
-        int a; int b; int max = 0;
-        if (a > b) {
-            max = a;
-        } else if (a < b) {
-            max = b;
-        } else {
-            max = 0;
-        }
-        """,
-    ]
-
-    print("Testing compiler pipeline:")
-    print("=" * 80)
-
-    for i, test in enumerate(test_cases):
-        print(f"\nTest {i+1}:")
-        print("-" * 40)
-        print(f"Input:\n{test.strip()}")
-        print("-" * 40)
-
-        try:
-            # Tokenize
-            tokens = lex(test)
+    Flags control which parts are printed; printing can be toggled separately.
+    """
+    try:
+        tokens = lex(text)
+        if print_tokens:
             print(f"Tokens ({len(tokens)}):")
-            for j, token in enumerate(tokens[:10]):  # Show first 10 tokens
-                print(f"  {j:2}: {token}")
-            if len(tokens) > 10:
-                print(f"  ... and {len(tokens) - 10} more")
+            for i, token in enumerate(tokens[:50]):
+                print(f"  {i:3}: {token}")
+            if len(tokens) > 50:
+                print(f"  ... and {len(tokens) - 50} more")
 
-            # Parse
-            ast = parse_tokens(tokens)
+        ast = parse_tokens(tokens)
+        if print_ast:
             print("\nAST:")
             print(PrettyPrinter.print_ast(ast))
 
-            # Type check
-            try:
-                if ast.type == NodeType.PROGRAM:
-                    for stmt in ast.statements:
-                        TypeChecker.check_statement(stmt)
-                else:
-                    TypeChecker.check_statement(ast)
+        # Type check
+        try:
+            if ast.type == NodeType.PROGRAM:
+                for stmt in ast.statements:
+                    TypeChecker.check_statement(stmt)
+            else:
+                TypeChecker.check_statement(ast)
+            if print_ast:
                 print("\n✓ Type check passed")
-            except SyntaxError as e:
-                print(f"\n✗ Type error: {e}")
-
         except SyntaxError as e:
-            print(f"Error: {e}")
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-            import traceback
+            print(f"\n✗ Type error: {e}")
+            return
 
-            traceback.print_exc()
+        flat_ast = flatten_program(ast)
+        if print_flat:
+            print("\nFlattened AST:")
+            print(PrettyPrinter.print_ast(flat_ast))
+
+        if print_cfg_flag:
+            cfg = build_cfg(flat_ast)
+            liv = None
+            if show_liveness:
+                liv = analyze_liveness(cfg)
+                print("\nCFG (with liveness):")
+                print(
+                    PrettyPrinter.print_cfg(
+                        cfg, liveness=liv, collapse_liveness=collapse_liveness
+                    )
+                )
+            else:
+                print("\nCFG:")
+                print(PrettyPrinter.print_cfg(cfg))
+
+            # Optionally dump CFG + liveness to JSON. Produce a serializable
+            # representation: statements are converted to pretty-printed strings
+            # and live sets are lists of variable names.
+            if dump_cfg_path:
+                export = {
+                    "entry": cfg.get("entry"),
+                    "exit": cfg.get("exit"),
+                    "blocks": [],
+                }
+                for b in cfg.get("blocks", []):
+                    lbl = b["label"]
+                    block_entry = {
+                        "label": lbl,
+                        "out_edges": list(b.get("out_edges", [])),
+                        "statements": [],
+                        "live_in": [],
+                        "live_out": [],
+                        "instr_liveness": [],
+                    }
+                    # statements as pretty-printed strings
+                    for stmt in b.get("statements", []):
+                        block_entry["statements"].append(ast_to_json(stmt))
+
+                    if liv and lbl in liv:
+                        block_entry["live_in"] = sorted(
+                            list(liv[lbl].get("live_in", []))
+                        )
+                        block_entry["live_out"] = sorted(
+                            list(liv[lbl].get("live_out", []))
+                        )
+                        for li, lo in liv[lbl].get("instr_liveness", []):
+                            block_entry["instr_liveness"].append(
+                                {
+                                    "live_in": sorted(list(li)),
+                                    "live_out": sorted(list(lo)),
+                                }
+                            )
+
+                    export["blocks"].append(block_entry)
+
+                try:
+                    with open(dump_cfg_path, "w", encoding="utf-8") as fh:
+                        json.dump(export, fh, indent=2)
+                    print(f"Wrote CFG+liveness JSON to {dump_cfg_path}")
+                except Exception as e:
+                    print(f"Failed to write CFG JSON to {dump_cfg_path}: {e}")
+
+            # Optionally render visualization via Graphviz
+            if viz_path:
+                try:
+                    write_and_render(
+                        cfg,
+                        viz_path,
+                        liveness=liv,
+                        collapse_liveness=collapse_liveness,
+                        fmt=viz_format,
+                        use_surface=viz_surface,
+                        include_liveness=viz_include_liveness,
+                    )
+                    print(f"Wrote CFG visualization to {viz_path}.{viz_format}")
+                except Exception as e:
+                    print(f"Failed to render CFG visualization to {viz_path}: {e}")
+
+    except SyntaxError as e:
+        print(f"Syntax Error: {e}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
-def interactive_mode() -> None:
-    """Run interactive compiler mode."""
+def interactive_mode(
+    print_tokens: bool = False,
+    print_ast: bool = True,
+    print_flat: bool = True,
+    print_cfg_flag: bool = True,
+    show_liveness: bool = True,
+    collapse_liveness: bool = False,
+) -> None:
+    """Run interactive compiler REPL reading programs from stdin."""
     print("\nInteractive Compiler Mode (type 'quit' to exit)")
     print("=" * 80)
 
@@ -125,23 +188,15 @@ def interactive_mode() -> None:
             if not text:
                 continue
 
-            # Tokenize
-            tokens = lex(text)
-            print(f"\nTokens ({len(tokens)}):")
-            for i, token in enumerate(tokens):
-                print(f"  {i:3}: {token}")
-
-            # Parse
-            ast = parse_tokens(tokens)
-            print("\nAST:")
-            print(PrettyPrinter.print_ast(ast))
-
-            # Type check
-            try:
-                TypeChecker.check_statement(ast)
-                print("\n✓ Type check passed")
-            except SyntaxError as e:
-                print(f"\n✗ Type error: {e}")
+            process_program(
+                text,
+                print_tokens=print_tokens,
+                print_ast=print_ast,
+                print_flat=print_flat,
+                print_cfg_flag=print_cfg_flag,
+                show_liveness=show_liveness,
+                collapse_liveness=collapse_liveness,
+            )
 
         except SyntaxError as e:
             print(f"Syntax error: {e}")
@@ -153,5 +208,121 @@ def interactive_mode() -> None:
 
 
 if __name__ == "__main__":
-    test_compiler_pipeline()
-    # interactive_mode()
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Run compiler pipeline on a file or interactively from stdin"
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--file", "-f", dest="file", help="Path to source file to process"
+    )
+    group.add_argument(
+        "--interactive",
+        "-i",
+        dest="interactive",
+        action="store_true",
+        help="Start interactive REPL mode",
+    )
+    # printing/verbosity options
+    parser.add_argument(
+        "--print-tokens", dest="print_tokens", action="store_true", help="Print tokens"
+    )
+    parser.add_argument(
+        "--no-ast", dest="print_ast", action="store_false", help="Do not print AST"
+    )
+    parser.add_argument(
+        "--no-flat",
+        dest="print_flat",
+        action="store_false",
+        help="Do not print flattened AST",
+    )
+    parser.add_argument(
+        "--no-cfg", dest="print_cfg_flag", action="store_false", help="Do not print CFG"
+    )
+    # liveness options
+    parser.add_argument(
+        "--no-liveness",
+        dest="show_liveness",
+        action="store_false",
+        help="Do not compute or print liveness information",
+    )
+    parser.add_argument(
+        "--collapse-liveness",
+        dest="collapse_liveness",
+        action="store_true",
+        help="Collapse identical live sets across contiguous instructions",
+    )
+
+    # default behavior: print everything
+    parser.set_defaults(
+        print_tokens=False,
+        print_ast=True,
+        print_flat=True,
+        print_cfg_flag=True,
+        show_liveness=True,
+        collapse_liveness=False,
+    )
+    parser.add_argument(
+        "--dump-cfg", dest="dump_cfg", help="Path to write CFG+liveness JSON"
+    )
+    parser.add_argument(
+        "--viz-cfg",
+        dest="viz_cfg",
+        help="Path (without extension) to write Graphviz visualization of CFG",
+    )
+    parser.add_argument(
+        "--viz-format",
+        dest="viz_format",
+        default="svg",
+        help="Format for Graphviz output (svg, png, pdf, etc)",
+    )
+    parser.add_argument(
+        "--viz-surface",
+        dest="viz_surface",
+        action="store_true",
+        help="Use surface-style expression printing in CFG visualization",
+    )
+    parser.add_argument(
+        "--viz-no-liveness",
+        dest="viz_no_liveness",
+        action="store_true",
+        help="Omit liveness information from the CFG visualization image",
+    )
+
+    args = parser.parse_args()
+
+    if args.interactive:
+        interactive_mode(
+            print_tokens=args.print_tokens,
+            print_ast=args.print_ast,
+            print_flat=args.print_flat,
+            print_cfg_flag=args.print_cfg_flag,
+            show_liveness=args.show_liveness,
+            collapse_liveness=args.collapse_liveness,
+        )
+    elif args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8") as fh:
+                text = fh.read()
+        except Exception as e:
+            print(f"Failed to read file {args.file}: {e}")
+            sys.exit(1)
+
+        process_program(
+            text,
+            print_tokens=args.print_tokens,
+            print_ast=args.print_ast,
+            print_flat=args.print_flat,
+            print_cfg_flag=args.print_cfg_flag,
+            show_liveness=args.show_liveness,
+            collapse_liveness=args.collapse_liveness,
+            dump_cfg_path=args.dump_cfg,
+            viz_path=args.viz_cfg,
+            viz_format=args.viz_format,
+            viz_surface=args.viz_surface,
+            viz_include_liveness=(not args.viz_no_liveness),
+        )
+    else:
+        parser.print_help()

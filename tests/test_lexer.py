@@ -1,4 +1,4 @@
-from main import lex
+from tests.utils import lex
 from tokens import TokenType
 
 

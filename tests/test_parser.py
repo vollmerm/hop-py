@@ -1,4 +1,4 @@
-from main import lex, parse_tokens
+from tests.utils import parse_text
 from ast_nodes import NodeType, FunctionDeclarationNode
 from symbols import SymbolType
 
@@ -9,14 +9,14 @@ def _find_funcs(program_node):
 
 def test_parser_parses_variable_and_assignment():
     src = "int x = 5; x = x + 1;"
-    ast = parse_tokens(lex(src))
+    ast = parse_text(src)
     assert ast.type == NodeType.PROGRAM
     assert len(ast.statements) == 2
 
 
 def test_parser_parses_function_and_prototype():
     src = "int add(int a, int b) { return a + b; } void foo();"
-    ast = parse_tokens(lex(src))
+    ast = parse_text(src)
     funcs = _find_funcs(ast)
 
     names = [f.func_name for f in funcs]
