@@ -37,41 +37,42 @@ def _expr_uses(expr: ASTNode) -> Set[str]:
     if expr is None:
         return uses
     t = expr.type
-    if t == NodeType.IDENTIFIER:
-        if isinstance(expr, IdentifierNode):
-            uses.add(expr.name)
-    elif t in (NodeType.INT_LITERAL, NodeType.BOOL_LITERAL):
-        return uses
-    elif t == NodeType.BINARY_OP:
-        if isinstance(expr, BinaryOpNode):
-            uses |= _expr_uses(expr.left)
-            uses |= _expr_uses(expr.right)
-    elif t == NodeType.UNARY_OP:
-        if isinstance(expr, UnaryOpNode):
-            uses |= _expr_uses(expr.right)
-    elif t == NodeType.ARRAY_INDEX:
-        if isinstance(expr, ArrayIndexNode):
-            uses |= _expr_uses(expr.array)
-            uses |= _expr_uses(expr.index)
-    elif t == NodeType.FUNC_CALL:
-        if isinstance(expr, FunctionCallNode):
-            # function expression may be identifier
-            uses |= _expr_uses(expr.function)
-            for a in expr.arguments:
-                uses |= _expr_uses(a)
-    elif t == NodeType.ASSIGNMENT:
-        if isinstance(expr, AssignmentNode):
-            uses |= _expr_uses(expr.left)
-            uses |= _expr_uses(expr.right)
-    else:
-        # Conservative walk over attributes
-        for attr in getattr(expr, "__dict__", {}).values():
-            if isinstance(attr, ASTNode):
-                uses |= _expr_uses(attr)
-            elif isinstance(attr, list):
-                for x in attr:
-                    if isinstance(x, ASTNode):
-                        uses |= _expr_uses(x)
+    match t:
+        case NodeType.IDENTIFIER:
+            if isinstance(expr, IdentifierNode):
+                uses.add(expr.name)
+        case NodeType.INT_LITERAL | NodeType.BOOL_LITERAL:
+            return uses
+        case NodeType.BINARY_OP:
+            if isinstance(expr, BinaryOpNode):
+                uses |= _expr_uses(expr.left)
+                uses |= _expr_uses(expr.right)
+        case NodeType.UNARY_OP:
+            if isinstance(expr, UnaryOpNode):
+                uses |= _expr_uses(expr.right)
+        case NodeType.ARRAY_INDEX:
+            if isinstance(expr, ArrayIndexNode):
+                uses |= _expr_uses(expr.array)
+                uses |= _expr_uses(expr.index)
+        case NodeType.FUNC_CALL:
+            if isinstance(expr, FunctionCallNode):
+                # function expression may be identifier
+                uses |= _expr_uses(expr.function)
+                for a in expr.arguments:
+                    uses |= _expr_uses(a)
+        case NodeType.ASSIGNMENT:
+            if isinstance(expr, AssignmentNode):
+                uses |= _expr_uses(expr.left)
+                uses |= _expr_uses(expr.right)
+        case _:
+            # Conservative walk over attributes
+            for attr in getattr(expr, "__dict__", {}).values():
+                if isinstance(attr, ASTNode):
+                    uses |= _expr_uses(attr)
+                elif isinstance(attr, list):
+                    for x in attr:
+                        if isinstance(x, ASTNode):
+                            uses |= _expr_uses(x)
     return uses
 
 
@@ -81,24 +82,27 @@ def _stmt_defs(stmt: ASTNode) -> Set[str]:
     if stmt is None:
         return defs
     t = stmt.type
-    if t == NodeType.ASSIGNMENT and isinstance(stmt, AssignmentNode):
-        left = stmt.left
-        if isinstance(left, IdentifierNode):
-            defs.add(left.name)
-        elif isinstance(left, ArrayIndexNode):
-            # array write: conservatively treat array variable as defined
-            if isinstance(left.array, IdentifierNode):
-                defs.add(left.array.name)
-    elif t == NodeType.VAR_DECL and isinstance(stmt, VariableDeclarationNode):
-        defs.add(stmt.var_name)
-    elif t == NodeType.EXPR_STMT and isinstance(stmt, ExpressionStatementNode):
-        # Some expression statements can define temps via assignments; handle nested assignment
-        if stmt.expression and stmt.expression.type == NodeType.ASSIGNMENT:
-            defs |= _stmt_defs(stmt.expression)
-    elif t == NodeType.RETURN_STMT:
-        # return does not define local variables
-        pass
-    # Other statements (if/while) do not directly define at statement level
+    match t:
+        case NodeType.ASSIGNMENT if isinstance(stmt, AssignmentNode):
+            left = stmt.left
+            if isinstance(left, IdentifierNode):
+                defs.add(left.name)
+            elif isinstance(left, ArrayIndexNode):
+                # array write: conservatively treat array variable as defined
+                if isinstance(left.array, IdentifierNode):
+                    defs.add(left.array.name)
+        case NodeType.VAR_DECL if isinstance(stmt, VariableDeclarationNode):
+            defs.add(stmt.var_name)
+        case NodeType.EXPR_STMT if isinstance(stmt, ExpressionStatementNode):
+            # Some expression statements can define temps via assignments; handle nested assignment
+            if stmt.expression and stmt.expression.type == NodeType.ASSIGNMENT:
+                defs |= _stmt_defs(stmt.expression)
+        case NodeType.RETURN_STMT:
+            # return does not define local variables
+            pass
+        case _:
+            # Other statements (if/while) do not directly define at statement level
+            pass
     return defs
 
 
@@ -108,39 +112,40 @@ def _stmt_uses(stmt: ASTNode) -> Set[str]:
     if stmt is None:
         return uses
     t = stmt.type
-    if t == NodeType.ASSIGNMENT and isinstance(stmt, AssignmentNode):
-        uses |= _expr_uses(stmt.right)
-        # left may contain uses (array index)
-        if isinstance(stmt.left, ArrayIndexNode):
-            uses |= _expr_uses(stmt.left.array)
-            uses |= _expr_uses(stmt.left.index)
-        elif isinstance(stmt.left, IdentifierNode):
-            # assigning to plain identifier does not use it (except in some languages), skip
-            pass
-    elif t == NodeType.VAR_DECL and isinstance(stmt, VariableDeclarationNode):
-        if stmt.init_value:
-            uses |= _expr_uses(stmt.init_value)
-    elif t == NodeType.EXPR_STMT and isinstance(stmt, ExpressionStatementNode):
-        uses |= _expr_uses(stmt.expression)
-    elif t == NodeType.RETURN_STMT and isinstance(stmt, ReturnStatementNode):
-        if stmt.expression:
+    match t:
+        case NodeType.ASSIGNMENT if isinstance(stmt, AssignmentNode):
+            uses |= _expr_uses(stmt.right)
+            # left may contain uses (array index)
+            if isinstance(stmt.left, ArrayIndexNode):
+                uses |= _expr_uses(stmt.left.array)
+                uses |= _expr_uses(stmt.left.index)
+            elif isinstance(stmt.left, IdentifierNode):
+                # assigning to plain identifier does not use it (except in some languages), skip
+                pass
+        case NodeType.VAR_DECL if isinstance(stmt, VariableDeclarationNode):
+            if stmt.init_value:
+                uses |= _expr_uses(stmt.init_value)
+        case NodeType.EXPR_STMT if isinstance(stmt, ExpressionStatementNode):
             uses |= _expr_uses(stmt.expression)
-    elif t == NodeType.IF_STMT and isinstance(stmt, IfStatementNode):
-        uses |= _expr_uses(stmt.condition)
-    elif t == NodeType.WHILE_STMT and isinstance(stmt, WhileStatementNode):
-        uses |= _expr_uses(stmt.condition)
-    elif t == NodeType.FUNC_DECL and isinstance(stmt, FunctionDeclarationNode):
-        # function declaration: uses inside body
-        pass
-    else:
-        # Conservative walk
-        for attr in getattr(stmt, "__dict__", {}).values():
-            if isinstance(attr, ASTNode):
-                uses |= _expr_uses(attr)
-            elif isinstance(attr, list):
-                for x in attr:
-                    if isinstance(x, ASTNode):
-                        uses |= _expr_uses(x)
+        case NodeType.RETURN_STMT if isinstance(stmt, ReturnStatementNode):
+            if stmt.expression:
+                uses |= _expr_uses(stmt.expression)
+        case NodeType.IF_STMT if isinstance(stmt, IfStatementNode):
+            uses |= _expr_uses(stmt.condition)
+        case NodeType.WHILE_STMT if isinstance(stmt, WhileStatementNode):
+            uses |= _expr_uses(stmt.condition)
+        case NodeType.FUNC_DECL if isinstance(stmt, FunctionDeclarationNode):
+            # function declaration: uses inside body
+            pass
+        case _:
+            # Conservative walk
+            for attr in getattr(stmt, "__dict__", {}).values():
+                if isinstance(attr, ASTNode):
+                    uses |= _expr_uses(attr)
+                elif isinstance(attr, list):
+                    for x in attr:
+                        if isinstance(x, ASTNode):
+                            uses |= _expr_uses(x)
     return uses
 
 
