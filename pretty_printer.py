@@ -14,7 +14,60 @@ from typing import Optional
 from ast_nodes import *
 
 
+
 class PrettyPrinter:
+    @staticmethod
+    def print_instr_cfg(cfg: dict) -> str:
+        """Pretty print a CFG after instruction selection (lists of instructions per statement)."""
+        lines = []
+        blocks = cfg.get("blocks", [])
+        entry = cfg.get("entry")
+        exit_ = cfg.get("exit")
+        lines.append(f"InstrCFG: entry={entry} exit={exit_}")
+        for block in blocks:
+            lbl = block["label"]
+            lines.append(f"  Block {lbl}:")
+            stmts = block.get("statements", [])
+            for i, instrs in enumerate(stmts):
+                if not instrs:
+                    continue
+                lines.append(f"    Statement {i}:")
+                for instr in instrs:
+                    # Format Register objects and dicts nicely
+                    def fmt_val(val):
+                        if isinstance(val, list):
+                            return [fmt_val(v) for v in val]
+                        if hasattr(val, 'name') and hasattr(val, 'is_virtual'):
+                            # Register
+                            return f"{val.name}{' (v)' if getattr(val, 'is_virtual', False) else ''}"
+                        return repr(val)
+
+                    # Special-case some ops for clearer output
+                    op = instr.get('op')
+                    if op == 'FUNC_LABEL':
+                        name = instr.get('name')
+                        lines.append(f"      FUNC {name}:")
+                        continue
+                    if op == 'CALL':
+                        fname = instr.get('func')
+                        lines.append(f"      CALL {fname}")
+                        continue
+                    if op == 'RET':
+                        lines.append(f"      RET")
+                        continue
+
+                    parts = []
+                    for k, v in instr.items():
+                        if k == 'op':
+                            parts.append(str(v))
+                        else:
+                            parts.append(f"{k}={fmt_val(v)}")
+                    instr_str = ', '.join(parts)
+                    lines.append(f"      {instr_str}")
+            out_edges = block.get("out_edges", [])
+            lines.append(f"    Out edges: {out_edges}")
+        return "\n".join(lines)
+
     @staticmethod
     def print_cfg(
         cfg: dict, liveness: Optional[dict] = None, collapse_liveness: bool = False
