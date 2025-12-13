@@ -36,6 +36,21 @@ def flatten_block(block: BlockNode, tempgen: TempVarGenerator) -> BlockNode:
     return BlockNode(statements=stmts)
 
 
+def flatten_lhs_expr(expr: ASTNode, tempgen: TempVarGenerator) -> Tuple[List[ASTNode], ASTNode]:
+    """Flatten an expression when it's used as an lvalue (left-hand side).
+
+    Unlike `flatten_expr`, this preserves `ArrayIndex` as an lvalue node
+    (with flattened children) instead of turning it into a temporary that
+    reads from the array.
+    """
+    if expr.type == NodeType.ARRAY_INDEX:
+        stmts_arr, arr = flatten_expr(expr.array, tempgen)
+        stmts_idx, idx = flatten_expr(expr.index, tempgen)
+        return stmts_arr + stmts_idx, ArrayIndexNode(array=arr, index=idx)
+    # Fallback: for identifiers and other lvalues, reuse flatten_expr
+    return flatten_expr(expr, tempgen)
+
+
 def flatten_statement(stmt: ASTNode, tempgen: TempVarGenerator):
     t = stmt.type
     if t == NodeType.BLOCK:
@@ -44,7 +59,10 @@ def flatten_statement(stmt: ASTNode, tempgen: TempVarGenerator):
         flat_stmts, expr = flatten_expr(stmt.expression, tempgen)
         return flat_stmts + [ExpressionStatementNode(expression=expr)]
     elif t == NodeType.ASSIGNMENT:
-        flat_stmts_left, left = flatten_expr(stmt.left, tempgen)
+        # For the left-hand side of an assignment we must preserve lvalue
+        # shape (e.g. ArrayIndex) rather than converting it into a temporary
+        # used for rvalue expressions. Use the globally-defined lhs flattener.
+        flat_stmts_left, left = flatten_lhs_expr(stmt.left, tempgen)
         flat_stmts_right, right = flatten_expr(stmt.right, tempgen)
         assign = AssignmentNode(left=left, right=right)
         return flat_stmts_left + flat_stmts_right + [assign]
@@ -155,7 +173,11 @@ def flatten_expr(
         return stmts + [assign], tmp_var
     # Assignment: flatten both sides, assign to temp
     elif t == NodeType.ASSIGNMENT:
-        stmts_left, left = flatten_expr(expr.left, tempgen)
+        # When flattening an assignment used as an expression, preserve
+        # lvalue shape for left-hand side (so stores like `arr[i] = v` are
+        # represented correctly). Use `flatten_lhs_expr` to avoid turning
+        # ArrayIndex lvalues into temporaries.
+        stmts_left, left = flatten_lhs_expr(expr.left, tempgen)
         stmts_right, right = flatten_expr(expr.right, tempgen)
         tmp_name = tempgen.new()
         tmp_var = IdentifierNode(name=tmp_name, symbol_type=None)
