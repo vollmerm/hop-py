@@ -329,7 +329,10 @@ class Parser:
         dimensions = 0
         while self.current.type == TokenType.LBRACKET:
             self.advance()
-            # TODO: Parse array size if specified
+            # Optional array size: allow an integer literal inside brackets
+            if self.current.type == TokenType.INTEGER:
+                # consume the size token (we don't currently store it)
+                self.advance()
             self.expect(TokenType.RBRACKET)
             dimensions += 1
 
