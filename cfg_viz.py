@@ -51,14 +51,17 @@ def render_cfg_dot(
     for b in cfg.get("blocks", []):
         lbl = b["label"]
         stmts = b.get("statements", [])
-        # header: label and block-level live sets (optional)
+        # header: label and optional block-level live sets (only when requested)
         live_in = []
         live_out = []
         if include_liveness and liveness and lbl in liveness:
             live_in = sorted(list(liveness[lbl].get("live_in", [])))
             live_out = sorted(list(liveness[lbl].get("live_out", [])))
-        # Use quoted attributes and uppercase tags to satisfy Graphviz HTML-like label requirements
-        header = f"<TR><TD COLSPAN=\"999\"><B>{html.escape(lbl)}</B> &nbsp; <FONT POINT-SIZE=\"8\">in: {html.escape(', '.join(live_in))} out: {html.escape(', '.join(live_out))}</FONT></TD></TR>"
+            # include live sets in header when liveness requested
+            header = f"<TR><TD COLSPAN=\"999\"><B>{html.escape(lbl)}</B> &nbsp; <FONT POINT-SIZE=\"8\">in: {html.escape(', '.join(live_in))} out: {html.escape(', '.join(live_out))}</FONT></TD></TR>"
+        else:
+            # omit the in/out text when liveness is not included
+            header = f"<TR><TD COLSPAN=\"999\"><B>{html.escape(lbl)}</B></TD></TR>"
         # statements row: each cell is a statement
         cells = []
         instr_l = []

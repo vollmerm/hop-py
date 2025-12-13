@@ -45,16 +45,17 @@ Graphviz visualization
 - `--viz-no-liveness` : Omit liveness annotations from the visualization image.
 
 Examples
-- Generate a PNG with surface-style printing and liveness included (default):
+- `--viz-liveness` : Include liveness annotations in the visualization image (off by default).
+- Generate a PNG with surface-style printing and no liveness shown (default):
 
 ```bash
 python -m main --file examples/complex.hop --viz-cfg out/complex --viz-format png --viz-surface
 ```
 
-- Generate a visualization without any liveness shown:
+- Generate a PNG with liveness annotations included:
 
 ```bash
-python -m main --file examples/complex.hop --viz-cfg out/complex_no_liv --viz-format png --viz-surface --viz-no-liveness
+python -m main --file examples/complex.hop --viz-cfg out/complex_with_liv --viz-format png --viz-surface --viz-liveness
 ```
 
 Notes

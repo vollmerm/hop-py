@@ -41,7 +41,7 @@ def process_program(
     viz_path: Optional[str] = None,
     viz_format: str = "svg",
     viz_surface: bool = False,
-    viz_include_liveness: bool = True,
+    viz_include_liveness: bool = False,
 ) -> None:
     """Process a single program: lex, parse, typecheck, flatten, build CFG and optionally print stages.
 
@@ -285,10 +285,10 @@ if __name__ == "__main__":
         help="Use surface-style expression printing in CFG visualization",
     )
     parser.add_argument(
-        "--viz-no-liveness",
-        dest="viz_no_liveness",
+        "--viz-liveness",
+        dest="viz_liveness",
         action="store_true",
-        help="Omit liveness information from the CFG visualization image",
+        help="Include liveness information in the CFG visualization image",
     )
 
     args = parser.parse_args()
@@ -322,7 +322,7 @@ if __name__ == "__main__":
             viz_path=args.viz_cfg,
             viz_format=args.viz_format,
             viz_surface=args.viz_surface,
-            viz_include_liveness=(not args.viz_no_liveness),
+            viz_include_liveness=(args.viz_liveness),
         )
     else:
         parser.print_help()
