@@ -391,7 +391,7 @@ def dead_code_elim(cfg: Dict[str, any], level: str = "aggressive", liv: Optional
                     return True
                 return False
             case WhileStatementNode(condition=cond, body=body):
-                return _occurs_in(condition, name) or _occurs_in(body, name)
+                return _occurs_in(cond, name) or _occurs_in(body, name)
             case ReturnStatementNode(expression=expr) if expr is not None:
                 return _occurs_in(expr, name)
             case FunctionDeclarationNode(body=bd) if bd is not None:

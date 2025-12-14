@@ -1,9 +1,4 @@
-"""Tests for CFG-level copy-propagation and the tmp-removal optimization.
-
-These tests verify that the optimization removes unnecessary temporaries
-introduced by the flattener (e.g. `_tmp = call(...); var x = _tmp; return x;`)
-and that simple identifier-to-identifier copies are propagated.
-"""
+"""Tests for CFG-level copy-propagation and the tmp-removal optimization."""
 
 from ast_nodes import *
 from ast_flatten import flatten_program
