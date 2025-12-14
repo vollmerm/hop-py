@@ -137,165 +137,93 @@ class PrettyPrinter:
             lines.append(f"{indent_str}{prefix}{node}")
             return "\n".join(lines)
 
-        node_type = node.type
+        match node:
+            case IntLiteralNode(value=v):
+                lines.append(f"{indent_str}{prefix}IntLiteral({v})")
 
-        match node_type:
-            case NodeType.INT_LITERAL:
-                if isinstance(node, IntLiteralNode):
-                    lines.append(f"{indent_str}{prefix}IntLiteral({node.value})")
+            case BoolLiteralNode(value=v):
+                lines.append(f"{indent_str}{prefix}BoolLiteral({v})")
 
-            case NodeType.BOOL_LITERAL:
-                if isinstance(node, BoolLiteralNode):
-                    lines.append(f"{indent_str}{prefix}BoolLiteral({node.value})")
+            case IdentifierNode(name=n, symbol_type=st, is_array=is_arr):
+                type_info = f", type={st}" if st else ""
+                if is_arr:
+                    type_info += " (array)"
+                lines.append(f"{indent_str}{prefix}Identifier({n}{type_info})")
 
-            case NodeType.IDENTIFIER:
-                if isinstance(node, IdentifierNode):
-                    type_info = f", type={node.symbol_type}" if node.symbol_type else ""
-                    if node.is_array:
-                        type_info += " (array)"
-                    lines.append(
-                        f"{indent_str}{prefix}Identifier({node.name}{type_info})"
-                    )
+            case BinaryOpNode(left=left, operator=op, right=right):
+                lines.append(f"{indent_str}{prefix}BinaryOp({op})")
+                lines.append(PrettyPrinter.print_ast(left, indent + 2, "left: "))
+                lines.append(PrettyPrinter.print_ast(right, indent + 2, "right: "))
 
-            case NodeType.BINARY_OP:
-                if isinstance(node, BinaryOpNode):
-                    lines.append(f"{indent_str}{prefix}BinaryOp({node.operator})")
-                    lines.append(
-                        PrettyPrinter.print_ast(node.left, indent + 2, "left: ")
-                    )
-                    lines.append(
-                        PrettyPrinter.print_ast(node.right, indent + 2, "right: ")
-                    )
+            case UnaryOpNode(operator=op, right=right):
+                lines.append(f"{indent_str}{prefix}UnaryOp({op})")
+                lines.append(PrettyPrinter.print_ast(right, indent + 2))
 
-            case NodeType.UNARY_OP:
-                if isinstance(node, UnaryOpNode):
-                    lines.append(f"{indent_str}{prefix}UnaryOp({node.operator})")
-                    lines.append(PrettyPrinter.print_ast(node.right, indent + 2))
+            case ArrayIndexNode(array=arr, index=idx):
+                lines.append(f"{indent_str}{prefix}ArrayIndex")
+                lines.append(PrettyPrinter.print_ast(arr, indent + 2, "array: "))
+                lines.append(PrettyPrinter.print_ast(idx, indent + 2, "index: "))
 
-            case NodeType.ARRAY_INDEX:
-                if isinstance(node, ArrayIndexNode):
-                    lines.append(f"{indent_str}{prefix}ArrayIndex")
-                    lines.append(
-                        PrettyPrinter.print_ast(node.array, indent + 2, "array: ")
-                    )
-                    lines.append(
-                        PrettyPrinter.print_ast(node.index, indent + 2, "index: ")
-                    )
+            case FunctionCallNode(function=func, arguments=args):
+                func_name = (
+                    func.name if isinstance(func, IdentifierNode) else "anonymous"
+                )
+                lines.append(f"{indent_str}{prefix}FunctionCall({func_name})")
+                for i, arg in enumerate(args):
+                    lines.append(PrettyPrinter.print_ast(arg, indent + 4, f"arg[{i}]: "))
 
-            case NodeType.FUNC_CALL:
-                if isinstance(node, FunctionCallNode):
-                    func_name = (
-                        node.function.name
-                        if isinstance(node.function, IdentifierNode)
-                        else "anonymous"
-                    )
-                    lines.append(f"{indent_str}{prefix}FunctionCall({func_name})")
-                    for i, arg in enumerate(node.arguments):
-                        lines.append(
-                            PrettyPrinter.print_ast(arg, indent + 4, f"arg[{i}]: ")
-                        )
+            case FunctionDeclarationNode(func_name=name, arg_names=anames, arg_types=atypes, body=body):
+                args = ", ".join(f"{n}: {t}" for n, t in zip(anames, atypes))
+                lines.append(f"{indent_str}{prefix}FunctionDecl({name} -> {node.return_type}, params=[{args}])")
+                if body:
+                    lines.append(PrettyPrinter.print_ast(body, indent + 4, "body: "))
 
-            case NodeType.FUNC_DECL:
-                if isinstance(node, FunctionDeclarationNode):
-                    args = ", ".join(
-                        f"{n}: {t}" for n, t in zip(node.arg_names, node.arg_types)
-                    )
-                    lines.append(
-                        f"{indent_str}{prefix}FunctionDecl({node.func_name} -> {node.return_type}, params=[{args}])"
-                    )
-                    if node.body:
-                        lines.append(
-                            PrettyPrinter.print_ast(node.body, indent + 4, "body: ")
-                        )
+            case ReturnStatementNode(expression=expr):
+                lines.append(f"{indent_str}{prefix}Return")
+                if expr:
+                    lines.append(PrettyPrinter.print_ast(expr, indent + 2, "expr: "))
 
-            case NodeType.RETURN_STMT:
-                if isinstance(node, ReturnStatementNode):
-                    lines.append(f"{indent_str}{prefix}Return")
-                    if node.expression:
-                        lines.append(
-                            PrettyPrinter.print_ast(
-                                node.expression, indent + 2, "expr: "
-                            )
-                        )
+            case AssignmentNode(left=left, right=right):
+                lines.append(f"{indent_str}{prefix}Assignment")
+                lines.append(PrettyPrinter.print_ast(left, indent + 2, "left: "))
+                lines.append(PrettyPrinter.print_ast(right, indent + 2, "right: "))
 
-            case NodeType.ASSIGNMENT:
-                if isinstance(node, AssignmentNode):
-                    lines.append(f"{indent_str}{prefix}Assignment")
-                    lines.append(
-                        PrettyPrinter.print_ast(node.left, indent + 2, "left: ")
-                    )
-                    lines.append(
-                        PrettyPrinter.print_ast(node.right, indent + 2, "right: ")
-                    )
+            case ExpressionStatementNode(expression=expr):
+                lines.append(f"{indent_str}{prefix}ExpressionStatement")
+                lines.append(PrettyPrinter.print_ast(expr, indent + 2))
 
-            case NodeType.EXPR_STMT:
-                if isinstance(node, ExpressionStatementNode):
-                    lines.append(f"{indent_str}{prefix}ExpressionStatement")
-                    lines.append(PrettyPrinter.print_ast(node.expression, indent + 2))
+            case WhileStatementNode(condition=cond, body=body):
+                lines.append(f"{indent_str}{prefix}WhileStatement")
+                lines.append(PrettyPrinter.print_ast(cond, indent + 4, "condition: "))
+                lines.append(PrettyPrinter.print_ast(body, indent + 4, "body: "))
 
-            case NodeType.WHILE_STMT:
-                if isinstance(node, WhileStatementNode):
-                    lines.append(f"{indent_str}{prefix}WhileStatement")
-                    lines.append(
-                        PrettyPrinter.print_ast(
-                            node.condition, indent + 4, "condition: "
-                        )
-                    )
-                    lines.append(
-                        PrettyPrinter.print_ast(node.body, indent + 4, "body: ")
-                    )
+            case IfStatementNode(condition=cond, then_block=then_b, else_block=else_b):
+                lines.append(f"{indent_str}{prefix}IfStatement")
+                lines.append(PrettyPrinter.print_ast(cond, indent + 4, "condition: "))
+                lines.append(PrettyPrinter.print_ast(then_b, indent + 4, "then: "))
+                if else_b:
+                    lines.append(PrettyPrinter.print_ast(else_b, indent + 4, "else: "))
 
-            case NodeType.IF_STMT:
-                if isinstance(node, IfStatementNode):
-                    lines.append(f"{indent_str}{prefix}IfStatement")
-                    lines.append(
-                        PrettyPrinter.print_ast(
-                            node.condition, indent + 4, "condition: "
-                        )
-                    )
-                    lines.append(
-                        PrettyPrinter.print_ast(node.then_block, indent + 4, "then: ")
-                    )
-                    if node.else_block:
-                        lines.append(
-                            PrettyPrinter.print_ast(
-                                node.else_block, indent + 4, "else: "
-                            )
-                        )
+            case BlockNode(statements=stmts):
+                lines.append(f"{indent_str}{prefix}Block")
+                for i, stmt in enumerate(stmts):
+                    lines.append(PrettyPrinter.print_ast(stmt, indent + 4, f"stmt[{i}]: "))
 
-            case NodeType.BLOCK:
-                if isinstance(node, BlockNode):
-                    lines.append(f"{indent_str}{prefix}Block")
-                    for i, stmt in enumerate(node.statements):
-                        lines.append(
-                            PrettyPrinter.print_ast(stmt, indent + 4, f"stmt[{i}]: ")
-                        )
+            case VariableDeclarationNode(var_name=vname, var_type=vtype, init_value=init):
+                init_str = f" = ..." if init else ""
+                lines.append(f"{indent_str}{prefix}VarDecl({vname}: {vtype}{init_str})")
+                if init:
+                    lines.append(PrettyPrinter.print_ast(init, indent + 2, "init: "))
 
-            case NodeType.VAR_DECL:
-                if isinstance(node, VariableDeclarationNode):
-                    init_str = f" = ..." if node.init_value else ""
-                    lines.append(
-                        f"{indent_str}{prefix}VarDecl({node.var_name}: {node.var_type}{init_str})"
-                    )
-                    if node.init_value:
-                        lines.append(
-                            PrettyPrinter.print_ast(
-                                node.init_value, indent + 2, "init: "
-                            )
-                        )
-
-            case NodeType.PROGRAM:
-                if isinstance(node, ProgramNode):
-                    lines.append(f"{indent_str}{prefix}Program")
-                    for i, stmt in enumerate(node.statements):
-                        lines.append(
-                            PrettyPrinter.print_ast(stmt, indent + 4, f"stmt[{i}]: ")
-                        )
+            case ProgramNode(statements=stmts):
+                lines.append(f"{indent_str}{prefix}Program")
+                for i, stmt in enumerate(stmts):
+                    lines.append(PrettyPrinter.print_ast(stmt, indent + 4, f"stmt[{i}]: "))
 
             case _:
-                lines.append(f"{indent_str}{prefix}Unknown node type: {node_type}")
+                lines.append(f"{indent_str}{prefix}Unknown node type: {type(node)}")
 
-        return "\n".join(line for line in lines if line)  # Remove empty lines
+        return "\n".join(line for line in lines if line)
 
     @staticmethod
     def print_surface(node: ASTNode) -> str:
@@ -311,59 +239,49 @@ class PrettyPrinter:
         def _p(n: ASTNode) -> str:
             return PrettyPrinter.print_surface(n) if isinstance(n, ASTNode) else str(n)
 
-        nt = node.type if isinstance(node, ASTNode) else None
-
-        match nt:
-            case NodeType.INT_LITERAL:
-                return str(node.value)
-            case NodeType.BOOL_LITERAL:
-                return "true" if node.value else "false"
-            case NodeType.IDENTIFIER:
-                return node.name
-            case NodeType.BINARY_OP:
-                # left op right
-                return f"{_p(node.left)} {node.operator} {_p(node.right)}"
-            case NodeType.UNARY_OP:
-                return f"{node.operator}{_p(node.right)}"
-            case NodeType.ARRAY_INDEX:
-                return f"{_p(node.array)}[{_p(node.index)}]"
-            case NodeType.FUNC_CALL:
-                fname = (
-                    node.function.name
-                    if isinstance(node.function, IdentifierNode)
-                    else _p(node.function)
-                )
-                args = ", ".join(_p(a) for a in node.arguments)
-                return f"{fname}({args})"
-            case NodeType.ASSIGNMENT:
-                return f"{_p(node.left)} = {_p(node.right)}"
-            case NodeType.EXPR_STMT:
-                return _p(node.expression)
-            case NodeType.RETURN_STMT:
-                if node.expression:
-                    return f"return {_p(node.expression)}"
+        match node:
+            case IntLiteralNode(value=v):
+                return str(v)
+            case BoolLiteralNode(value=v):
+                return "true" if v else "false"
+            case IdentifierNode(name=n):
+                return n
+            case BinaryOpNode(left=l, operator=op, right=r):
+                return f"{_p(l)} {op} {_p(r)}"
+            case UnaryOpNode(operator=op, right=right):
+                return f"{op}{_p(right)}"
+            case ArrayIndexNode(array=arr, index=idx):
+                return f"{_p(arr)}[{_p(idx)}]"
+            case FunctionCallNode(function=func, arguments=args):
+                fname = func.name if isinstance(func, IdentifierNode) else _p(func)
+                args_s = ", ".join(_p(a) for a in args)
+                return f"{fname}({args_s})"
+            case AssignmentNode(left=left, right=right):
+                return f"{_p(left)} = {_p(right)}"
+            case ExpressionStatementNode(expression=expr):
+                return _p(expr)
+            case ReturnStatementNode(expression=expr):
+                if expr:
+                    return f"return {_p(expr)}"
                 return "return"
-            case NodeType.VAR_DECL:
+            case VariableDeclarationNode(var_type=vt, var_name=vn, init_value=init):
                 tname = (
-                    getattr(node.var_type, "name", str(node.var_type)).lower()
-                    if node.var_type is not None
-                    else "var"
+                    getattr(vt, "name", str(vt)).lower() if vt is not None else "var"
                 )
-                if node.init_value:
-                    return f"{tname} {node.var_name} = {_p(node.init_value)}"
-                return f"{tname} {node.var_name}"
-            case NodeType.WHILE_STMT:
-                return f"while ({_p(node.condition)})"
-            case NodeType.IF_STMT:
-                return f"if ({_p(node.condition)})"
-            case NodeType.FUNC_DECL:
-                args = ", ".join(node.arg_names) if node.arg_names else ""
-                return f"func {node.func_name}({args})"
-            case NodeType.BLOCK:
+                if init:
+                    return f"{tname} {vn} = {_p(init)}"
+                return f"{tname} {vn}"
+            case WhileStatementNode(condition=cond):
+                return f"while ({_p(cond)})"
+            case IfStatementNode(condition=cond):
+                return f"if ({_p(cond)})"
+            case FunctionDeclarationNode(func_name=fn, arg_names=an):
+                args = ", ".join(an) if an else ""
+                return f"func {fn}({args})"
+            case BlockNode():
                 return "{...}"
-            case NodeType.PROGRAM:
+            case ProgramNode():
                 return "<program>"
             case _:
-                # Fallback to the verbose AST printer but collapse to single line
                 s = PrettyPrinter.print_ast(node)
                 return " ".join(line.strip() for line in s.splitlines())
