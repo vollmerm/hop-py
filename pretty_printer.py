@@ -14,7 +14,6 @@ from typing import Optional
 from ast_nodes import *
 
 
-
 class PrettyPrinter:
     @staticmethod
     def print_instr_cfg(cfg: dict) -> str:
@@ -37,32 +36,32 @@ class PrettyPrinter:
                     def fmt_val(val):
                         if isinstance(val, list):
                             return [fmt_val(v) for v in val]
-                        if hasattr(val, 'name') and hasattr(val, 'is_virtual'):
+                        if hasattr(val, "name") and hasattr(val, "is_virtual"):
                             # Register
                             return f"{val.name}{' (v)' if getattr(val, 'is_virtual', False) else ''}"
                         return repr(val)
 
                     # Special-case some ops for clearer output
-                    op = instr.get('op')
-                    if op == 'FUNC_LABEL':
-                        name = instr.get('name')
+                    op = instr.get("op")
+                    if op == "FUNC_LABEL":
+                        name = instr.get("name")
                         lines.append(f"      FUNC {name}:")
                         continue
-                    if op == 'CALL':
-                        fname = instr.get('func')
+                    if op == "CALL":
+                        fname = instr.get("func")
                         lines.append(f"      CALL {fname}")
                         continue
-                    if op == 'RET':
+                    if op == "RET":
                         lines.append(f"      RET")
                         continue
 
                     parts = []
                     for k, v in instr.items():
-                        if k == 'op':
+                        if k == "op":
                             parts.append(str(v))
                         else:
                             parts.append(f"{k}={fmt_val(v)}")
-                    instr_str = ', '.join(parts)
+                    instr_str = ", ".join(parts)
                     lines.append(f"      {instr_str}")
             out_edges = block.get("out_edges", [])
             lines.append(f"    Out edges: {out_edges}")
@@ -329,7 +328,11 @@ class PrettyPrinter:
             case NodeType.ARRAY_INDEX:
                 return f"{_p(node.array)}[{_p(node.index)}]"
             case NodeType.FUNC_CALL:
-                fname = node.function.name if isinstance(node.function, IdentifierNode) else _p(node.function)
+                fname = (
+                    node.function.name
+                    if isinstance(node.function, IdentifierNode)
+                    else _p(node.function)
+                )
                 args = ", ".join(_p(a) for a in node.arguments)
                 return f"{fname}({args})"
             case NodeType.ASSIGNMENT:
@@ -341,7 +344,11 @@ class PrettyPrinter:
                     return f"return {_p(node.expression)}"
                 return "return"
             case NodeType.VAR_DECL:
-                tname = getattr(node.var_type, "name", str(node.var_type)).lower() if node.var_type is not None else "var"
+                tname = (
+                    getattr(node.var_type, "name", str(node.var_type)).lower()
+                    if node.var_type is not None
+                    else "var"
+                )
                 if node.init_value:
                     return f"{tname} {node.var_name} = {_p(node.init_value)}"
                 return f"{tname} {node.var_name}"

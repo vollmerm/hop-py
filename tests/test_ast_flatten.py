@@ -18,18 +18,15 @@ def test_flatten_simple_add():
         statements=[ExpressionStatementNode(expression=make_add("a", "b"))]
     )
     flat = flatten_program(prog)
-    # Should introduce a temp assignment and then use the temp in the expr stmt
-    assert len(flat.statements) == 2
-    assign = flat.statements[0]
-    expr_stmt = flat.statements[1]
-    assert isinstance(assign, AssignmentNode)
+    # Both operands are simple identifiers, so no temporary is necessary.
+    # The expression statement should remain a BinaryOp expression.
+    assert len(flat.statements) == 1
+    expr_stmt = flat.statements[0]
     assert isinstance(expr_stmt, ExpressionStatementNode)
-    assert isinstance(expr_stmt.expression, IdentifierNode)
-    assert assign.left.name.startswith("_tmp")
-    assert assign.right.operator == "+"
-    assert assign.right.left.name == "a"
-    assert assign.right.right.name == "b"
-    assert expr_stmt.expression.name == assign.left.name
+    assert isinstance(expr_stmt.expression, BinaryOpNode)
+    assert expr_stmt.expression.operator == "+"
+    assert expr_stmt.expression.left.name == "a"
+    assert expr_stmt.expression.right.name == "b"
 
 
 def test_flatten_nested_add():
@@ -40,20 +37,19 @@ def test_flatten_nested_add():
     )
     prog = ProgramNode(statements=[ExpressionStatementNode(expression=outer)])
     flat = flatten_program(prog)
-    # Should introduce two temporaries
-    assign1 = flat.statements[0]
-    assign2 = flat.statements[1]
-    expr_stmt = flat.statements[2]
-    assert isinstance(assign1, AssignmentNode)
-    assert isinstance(assign2, AssignmentNode)
-    assert isinstance(expr_stmt, ExpressionStatementNode)
-    # assign1: _tmp1 = a + b
-    # assign2: _tmp2 = _tmp1 + c
-    assert assign1.left.name.startswith("_tmp")
-    assert assign2.left.name.startswith("_tmp")
-    assert assign2.right.left.name == assign1.left.name
-    assert assign2.right.right.name == "c"
-    assert expr_stmt.expression.name == assign2.left.name
+    # Inner (a+b) is already simple, so only a single temporary for the
+    # outer expression is produced: `_tmp = (a + b) + c`.
+    assert len(flat.statements) == 1
+    assign = flat.statements[0]
+    assert isinstance(assign, AssignmentNode)
+    assert assign.left.name.startswith("_tmp")
+    assert isinstance(assign.right, BinaryOpNode)
+    # The right-hand side should be (a + b) + c
+    inner_bin = assign.right.left
+    assert isinstance(inner_bin, BinaryOpNode)
+    assert inner_bin.left.name == "a"
+    assert inner_bin.right.name == "b"
+    assert assign.right.right.name == "c"
 
 
 def test_flatten_func_call():
@@ -64,21 +60,18 @@ def test_flatten_func_call():
     )
     prog = ProgramNode(statements=[ExpressionStatementNode(expression=call)])
     flat = flatten_program(prog)
-    # Should introduce a temp for a+b, a temp for the call, and use the call temp in the expr stmt
-    assign1 = flat.statements[0]
-    assign2 = flat.statements[1]
-    expr_stmt = flat.statements[2]
-    assert isinstance(assign1, AssignmentNode)
-    assert isinstance(assign2, AssignmentNode)
+    # The inner argument (a + b) is simple, so it should be passed as a
+    # BinaryOpNode directly to the function. The call's side-effects are
+    # preserved by emitting an ExpressionStatement containing the call.
+    assert len(flat.statements) == 1
+    expr_stmt = flat.statements[0]
     assert isinstance(expr_stmt, ExpressionStatementNode)
-    # assign1: _tmp1 = a + b
-    # assign2: _tmp2 = f(_tmp1, c)
-    assert assign1.left.name.startswith("_tmp")
-    assert assign2.left.name.startswith("_tmp")
-    call_args = assign2.right.arguments
-    assert call_args[0].name == assign1.left.name
+    assert isinstance(expr_stmt.expression, FunctionCallNode)
+    call_args = expr_stmt.expression.arguments
+    assert isinstance(call_args[0], BinaryOpNode)
+    assert call_args[0].left.name == "a"
+    assert call_args[0].right.name == "b"
     assert call_args[1].name == "c"
-    assert expr_stmt.expression.name == assign2.left.name
 
 
 def test_flatten_return():
@@ -86,12 +79,13 @@ def test_flatten_return():
     ret = ReturnStatementNode(expression=make_add("a", "b"))
     prog = ProgramNode(statements=[ret])
     flat = flatten_program(prog)
-    # Should introduce a temp for a+b, then return the temp
-    assign = flat.statements[0]
-    ret_stmt = flat.statements[1]
-    assert isinstance(assign, AssignmentNode)
+    # With simple operands the binary expression is returned directly.
+    assert len(flat.statements) == 1
+    ret_stmt = flat.statements[0]
     assert isinstance(ret_stmt, ReturnStatementNode)
-    assert ret_stmt.expression.name == assign.left.name
+    assert isinstance(ret_stmt.expression, BinaryOpNode)
+    assert ret_stmt.expression.left.name == "a"
+    assert ret_stmt.expression.right.name == "b"
 
 
 def test_flatten_if():
@@ -105,11 +99,32 @@ def test_flatten_if():
     if_stmt = IfStatementNode(condition=cond, then_block=then_block, else_block=None)
     prog = ProgramNode(statements=[if_stmt])
     flat = flatten_program(prog)
-    # Should introduce a temp for a+b, then the if
-    assign = flat.statements[0]
-    if_flat = flat.statements[1]
-    assert isinstance(assign, AssignmentNode)
+    # The condition (a + b) is simple; it should be embedded directly in
+    # the IfStatement's condition.
+    assert len(flat.statements) == 1
+    if_flat = flat.statements[0]
     assert isinstance(if_flat, IfStatementNode)
-    assert if_flat.condition.name == assign.left.name
+    assert isinstance(if_flat.condition, BinaryOpNode)
+    assert if_flat.condition.left.name == "a"
+    assert if_flat.condition.right.name == "b"
     assert isinstance(if_flat.then_block, BlockNode)
     assert isinstance(if_flat.then_block.statements[0], ReturnStatementNode)
+
+
+def test_flatten_assignment_expression_no_nested():
+    # An expression-statement whose expression is an assignment: `result = sum`
+    # After flattening we should get a single AssignmentNode `result = sum`
+    # (no `_tmp = result = sum` or other nested assignment forms).
+    assignment = AssignmentNode(
+        left=IdentifierNode(name="result", symbol_type=None),
+        right=IdentifierNode(name="sum", symbol_type=None),
+    )
+    prog = ProgramNode(statements=[ExpressionStatementNode(expression=assignment)])
+    flat = flatten_program(prog)
+    assert len(flat.statements) == 1
+    a = flat.statements[0]
+    assert isinstance(a, AssignmentNode)
+    assert isinstance(a.left, IdentifierNode)
+    assert isinstance(a.right, IdentifierNode)
+    assert a.left.name == "result"
+    assert a.right.name == "sum"

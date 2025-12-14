@@ -33,10 +33,83 @@ def fresh_label(counter: List[int]) -> str:
     return f"block_{counter[0]}"
 
 
-def build_cfg(ast: Union[BlockNode, FunctionDeclarationNode]) -> Dict[str, Any]:
-    """Builds a CFG from a flattened BlockNode or FunctionDeclarationNode."""
+def build_cfg(
+    ast: Union[BlockNode, FunctionDeclarationNode, ProgramNode],
+) -> Dict[str, Any]:
+    """Builds a CFG from a flattened BlockNode, FunctionDeclarationNode, or ProgramNode.
+
+    When given a `ProgramNode`, this function will create a top-level CFG
+    containing the global code blocks and separate blocks for each function
+    declaration found in the program. Function bodies are converted into
+    their own basic blocks (so visualizations and analyses can treat them
+    independently).
+    """
     label_counter = [0]
-    blocks = []
+    blocks: List[Dict[str, Any]] = []
+
+    # Helper to create a fresh empty block and append
+    def new_block() -> Dict[str, Any]:
+        lbl = fresh_label(label_counter)
+        b = {"label": lbl, "statements": [], "out_edges": []}
+        blocks.append(b)
+        return b
+
+    # If program: create global block(s) and extract functions into separate blocks
+    if isinstance(ast, ProgramNode):
+        entry_block = new_block()
+        cur_block = entry_block
+        # accumulate global statements until we hit a function declaration
+        global_stmts: List[ASTNode] = []
+
+        for stmt in ast.statements:
+            if isinstance(stmt, FunctionDeclarationNode):
+                # First flush any accumulated global statements into CFG blocks
+                if global_stmts:
+                    exit_lbl = _build_cfg_block(
+                        BlockNode(statements=global_stmts),
+                        cur_block,
+                        blocks,
+                        label_counter,
+                    )
+                    # Find the block with this label to continue
+                    cur_block = next(
+                        (b for b in blocks if b["label"] == exit_lbl), new_block()
+                    )
+                    global_stmts = []
+
+                # Start a fresh block for the function body
+                # Create a block for the function and mark subsequent blocks
+                # created for this function. We capture the start index so we can
+                # tag all blocks added by _build_cfg_block with the function name.
+                start_idx = len(blocks)
+                func_entry = new_block()
+                # Add the original FunctionDeclarationNode as header in the function's entry
+                func_entry["statements"].append(stmt)
+                # Build the CFG for the function body into func_entry and following blocks
+                _build_cfg_block(
+                    stmt.body if stmt.body is not None else BlockNode(statements=[]),
+                    func_entry,
+                    blocks,
+                    label_counter,
+                )
+                end_idx = len(blocks)
+                for b in blocks[start_idx:end_idx]:
+                    b["function"] = stmt.func_name
+                # After adding function blocks, create a new global block to continue
+                cur_block = new_block()
+            else:
+                global_stmts.append(stmt)
+
+        # flush remaining global statements
+        if global_stmts:
+            _build_cfg_block(
+                BlockNode(statements=global_stmts), cur_block, blocks, label_counter
+            )
+
+        cfg = {"blocks": blocks, "entry": entry_block["label"], "exit": None}
+        return cfg
+
+    # For single function or block, build normally
     entry_label = fresh_label(label_counter)
     block = {"label": entry_label, "statements": [], "out_edges": []}
     blocks.append(block)
@@ -78,7 +151,11 @@ def _build_cfg_block(
                 then_block["out_edges"].append(after_label)
                 # Else block
                 if stmt.else_block:
-                    else_block = {"label": else_label, "statements": [], "out_edges": []}
+                    else_block = {
+                        "label": else_label,
+                        "statements": [],
+                        "out_edges": [],
+                    }
                     blocks.append(else_block)
                     _build_cfg_block(stmt.else_block, else_block, blocks, label_counter)
                     else_block["out_edges"].append(after_label)
@@ -96,7 +173,11 @@ def _build_cfg_block(
                 # Jump to condition
                 cur_block["out_edges"].append(cond_label)
                 # Condition block
-                cond_block = {"label": cond_label, "statements": [stmt], "out_edges": []}
+                cond_block = {
+                    "label": cond_label,
+                    "statements": [stmt],
+                    "out_edges": [],
+                }
                 blocks.append(cond_block)
                 cond_block["out_edges"].append(body_label)
                 cond_block["out_edges"].append(after_label)

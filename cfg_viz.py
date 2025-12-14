@@ -11,9 +11,35 @@ colors.
 """
 
 from typing import Dict, Any, Optional
+import re
+from ast_nodes import NodeType, ExpressionStatementNode, IdentifierNode
 from graphviz import Digraph
 from pretty_printer import PrettyPrinter
 import html
+
+
+def _format_instr(instr: Dict[str, Any]) -> str:
+    """Return a short string for an instruction dict."""
+    if not isinstance(instr, dict):
+        return html.escape(str(instr))
+    op = instr.get("op", "")
+    # Build arg list
+    parts = [op]
+    for k in (
+        "rd",
+        "rs1",
+        "rs2",
+        "rs",
+        "base",
+        "offset",
+        "imm",
+        "func",
+        "target",
+        "name",
+    ):
+        if k in instr:
+            parts.append(f"{k}={instr[k]}")
+    return html.escape(" ".join(map(str, parts)))
 
 
 def _stmt_html(stmt_str: str, live_in=None, live_out=None, highlight=False) -> str:
@@ -47,59 +73,162 @@ def render_cfg_dot(
     dot = Digraph(format="svg")
     dot.attr("graph", rankdir="LR")
 
-    # Create nodes
+    # Compute predecessor (incoming edges) map so we can detect isolated blocks
+    preds = {b["label"]: [] for b in cfg.get("blocks", [])}
+    for b in cfg.get("blocks", []):
+        for succ in b.get("out_edges", []):
+            if succ in preds:
+                preds[succ].append(b["label"])
+
+    # First pass: determine function ownership for each block. Prefer explicit
+    # `function` metadata on the block (added by `build_cfg`); fall back to
+    # detecting a FunctionDeclarationNode or FUNC_LABEL inside the block.
+    block_infos = []
     for b in cfg.get("blocks", []):
         lbl = b["label"]
         stmts = b.get("statements", [])
-        # header: label and optional block-level live sets (only when requested)
-        live_in = []
-        live_out = []
-        if include_liveness and liveness and lbl in liveness:
-            live_in = sorted(list(liveness[lbl].get("live_in", [])))
-            live_out = sorted(list(liveness[lbl].get("live_out", [])))
-            # include live sets in header when liveness requested
-            header = f"<TR><TD COLSPAN=\"999\"><B>{html.escape(lbl)}</B> &nbsp; <FONT POINT-SIZE=\"8\">in: {html.escape(', '.join(live_in))} out: {html.escape(', '.join(live_out))}</FONT></TD></TR>"
-        else:
-            # omit the in/out text when liveness is not included
-            header = f"<TR><TD COLSPAN=\"999\"><B>{html.escape(lbl)}</B></TD></TR>"
-        # statements row: each cell is a statement
-        cells = []
-        instr_l = []
-        if include_liveness and liveness and lbl in liveness:
-            instr_l = liveness[lbl].get("instr_liveness", [])
-        for i, stmt in enumerate(stmts):
-            stmt_str = (
-                PrettyPrinter.print_surface(stmt) if use_surface else PrettyPrinter.print_ast(stmt)
-            )
-            live_in_i, live_out_i = (None, None)
-            highlight = False
-            if instr_l and i < len(instr_l):
-                live_in_i, live_out_i = instr_l[i]
-                # highlight if any variable is live_out
-                highlight = bool(live_out_i)
+        func_name = b.get("function")
+        if not func_name:
+            # fallback detection
+            for s in stmts:
+                if isinstance(s, list):
+                    for instr in s:
+                        if isinstance(instr, dict) and instr.get("op") == "FUNC_LABEL":
+                            func_name = instr.get("name")
+                            break
+                    if func_name:
+                        break
+                else:
+                    try:
+                        if getattr(s, "type", None) and s.type == NodeType.FUNC_DECL:
+                            func_name = getattr(s, "func_name", None)
+                            break
+                    except Exception:
+                        pass
 
-            # If include_liveness is False, suppress per-statement live info
-            if not include_liveness:
-                live_in_i = None
-                live_out_i = None
-                highlight = False
+        block_infos.append(
+            {
+                "label": lbl,
+                "stmts": stmts,
+                "func": func_name,
+                "out_edges": list(b.get("out_edges", [])),
+                "in_edges": list(preds.get(lbl, [])),
+            }
+        )
 
-            cells.append(
-                _stmt_html(stmt_str, live_in_i, live_out_i, highlight=highlight)
-            )
+    # Group blocks by function (None -> global)
+    groups = {}
+    for info in block_infos:
+        groups.setdefault(info["func"], []).append(info)
 
-        # assemble table: header + statements row
-        stmts_row = ""
-        if cells:
-            stmts_row = "<TR>" + "".join(cells) + "</TR>"
-        # Use uppercase TABLE and quoted attributes
-        table_html = f'<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">{header}{stmts_row}</TABLE>>'
-        dot.node(lbl, label=table_html, shape="plaintext")
+    # Filter out trivial empty isolated blocks (no statements, no in_edges, no out_edges)
+    included_labels = set()
+    filtered_infos = []
+    for info in block_infos:
+        if (not info["stmts"]) and (not info["in_edges"]) and (not info["out_edges"]):
+            # skip this isolated empty block
+            continue
+        filtered_infos.append(info)
+        included_labels.add(info["label"])
 
-    # Add edges
+    # Emit nodes grouped into subgraphs per function
+    for func, infos in groups.items():
+        # filter infos to only included ones
+        infos = [i for i in infos if i["label"] in included_labels]
+        if not infos:
+            continue
+        cluster_name = (
+            f"cluster_{re.sub(r'[^0-9A-Za-z_]', '_', func) if func else 'global'}"
+        )
+        with dot.subgraph(name=cluster_name) as c:
+            if func:
+                c.attr(label=f"function: {func}")
+            else:
+                c.attr(label="")
+            c.attr(style="rounded")
+            for info in infos:
+                lbl = info["label"]
+                stmts = info["stmts"]
+
+                # header: label and optional block-level live sets (only when requested)
+                live_in = []
+                live_out = []
+                if include_liveness and liveness and lbl in liveness:
+                    live_in = sorted(list(liveness[lbl].get("live_in", [])))
+                    live_out = sorted(list(liveness[lbl].get("live_out", [])))
+                    # include live sets in header when liveness requested
+                    header = f"<TR><TD COLSPAN=\"999\"><B>{html.escape(lbl)}</B> &nbsp; <FONT POINT-SIZE=\"8\">in: {html.escape(', '.join(live_in))} out: {html.escape(', '.join(live_out))}</FONT></TD></TR>"
+                else:
+                    # omit the in/out text when liveness is not included
+                    header = (
+                        f'<TR><TD COLSPAN="999"><B>{html.escape(lbl)}</B></TD></TR>'
+                    )
+
+                # statements row: each cell is a statement
+                cells = []
+                instr_l = []
+                if include_liveness and liveness and lbl in liveness:
+                    instr_l = liveness[lbl].get("instr_liveness", [])
+                for i, stmt in enumerate(stmts):
+                    # Statement may be a list of instruction dicts (after instrsel), a single
+                    # instruction dict, or an AST node. Handle all cases.
+                    if isinstance(stmt, list):
+                        stmt_str = " ; ".join(_format_instr(instr) for instr in stmt)
+                    elif isinstance(stmt, dict):
+                        stmt_str = _format_instr(stmt)
+                    else:
+                        # Skip trivial temporary-only expression statements like `_tmp8;`
+                        if (
+                            isinstance(stmt, ExpressionStatementNode)
+                            and isinstance(
+                                getattr(stmt, "expression", None), IdentifierNode
+                            )
+                            and getattr(stmt.expression, "name", "").startswith("_tmp")
+                        ):
+                            # render as empty cell (skip)
+                            continue
+                        stmt_str = (
+                            PrettyPrinter.print_surface(stmt)
+                            if use_surface
+                            else PrettyPrinter.print_ast(stmt)
+                        )
+                    live_in_i, live_out_i = (None, None)
+                    highlight = False
+                    if instr_l and i < len(instr_l):
+                        live_in_i, live_out_i = instr_l[i]
+                        # highlight if any variable is live_out
+                        highlight = bool(live_out_i)
+
+                    # If include_liveness is False, suppress per-statement live info
+                    if not include_liveness:
+                        live_in_i = None
+                        live_out_i = None
+                        highlight = False
+
+                    cells.append(
+                        _stmt_html(stmt_str, live_in_i, live_out_i, highlight=highlight)
+                    )
+
+                # assemble table: header + optional func row + statements row
+                func_row = ""
+                if func:
+                    func_row = f'<TR><TD COLSPAN="999"><FONT POINT-SIZE="8"><I>function: {html.escape(func)}</I></FONT></TD></TR>'
+
+                stmts_row = ""
+                if cells:
+                    stmts_row = "<TR>" + "".join(cells) + "</TR>"
+                # Use uppercase TABLE and quoted attributes
+                table_html = f'<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">{header}{func_row}{stmts_row}</TABLE>>'
+                c.node(lbl, label=table_html, shape="plaintext")
+
+    # Add edges between included blocks only
     for b in cfg.get("blocks", []):
+        src = b["label"]
+        if src not in included_labels:
+            continue
         for succ in b.get("out_edges", []):
-            dot.edge(b["label"], succ)
+            if succ in included_labels:
+                dot.edge(src, succ)
 
     return dot
 

@@ -260,9 +260,10 @@ class Parser:
                     )
 
                 self.advance()
-                right = self.parse_binary_expression(
-                    self.parse_primary(), precedence - 1
-                )
+                # Parse the right-hand side primary and any postfix (calls/index)
+                rhs_primary = self.parse_primary()
+                rhs = self.parse_postfix(rhs_primary)
+                right = self.parse_binary_expression(rhs, precedence - 1)
                 left = AssignmentNode(left=left, right=right)
                 continue
 
@@ -286,10 +287,10 @@ class Parser:
                     operator = token.value if token.value else token.type.name
                     self.advance()
 
-                    # Parse right operand with higher precedence
-                    right = self.parse_binary_expression(
-                        self.parse_primary(), precedence + 1
-                    )
+                    # Parse right operand with higher precedence, including postfixes
+                    rhs_primary = self.parse_primary()
+                    rhs = self.parse_postfix(rhs_primary)
+                    right = self.parse_binary_expression(rhs, precedence + 1)
                     left = BinaryOpNode(left=left, operator=operator, right=right)
 
                 case _:
@@ -335,6 +336,13 @@ class Parser:
                 self.advance()
             self.expect(TokenType.RBRACKET)
             dimensions += 1
+
+        # If we see a parenthesis here, this was meant to be a function
+        # declaration/definition but the lookahead in `parse_statement` didn't
+        # catch it. Delegate to helper that assumes return_type and name are
+        # already consumed.
+        if self.current.type == TokenType.LPAREN:
+            return self._parse_function_after_name(var_type, var_name)
 
         # Check for initialization
         init_value = None
@@ -417,6 +425,74 @@ class Parser:
         body = self.parse_block()
 
         # Restore outer symbol table
+        self.symbol_table = outer_table
+
+        return FunctionDeclarationNode(
+            func_name=func_name,
+            return_type=return_type,
+            arg_types=arg_types,
+            arg_names=arg_names,
+            body=body,
+        )
+
+    def _parse_function_after_name(
+        self, return_type: SymbolType, func_name: str
+    ) -> FunctionDeclarationNode:
+        """Helper to parse parameters and body when return type and name are already consumed.
+
+        This is used as a fallback from `parse_variable_declaration` when the
+        lookahead in `parse_statement` missed a function definition and the
+        parser has already consumed the type and identifier tokens.
+        """
+        # Current token should be LPAREN
+        self.expect(TokenType.LPAREN)
+        arg_types: List[SymbolType] = []
+        arg_names: List[str] = []
+
+        if self.current.type != TokenType.RPAREN:
+            while True:
+                param_type = self.parse_type()
+                param_name_token = self.expect(
+                    TokenType.IDENTIFIER, "Expected parameter name"
+                )
+                arg_types.append(param_type)
+                arg_names.append(param_name_token.value)
+
+                if self.current.type == TokenType.COMMA:
+                    self.advance()
+                    continue
+                break
+
+        self.expect(TokenType.RPAREN)
+
+        # Register function in symbol table
+        sym = self.symbol_table.declare(
+            name=func_name, type_=return_type, is_array=False, is_function=True
+        )
+        sym.parameters = arg_types
+
+        # Prototype without body
+        if self.current.type == TokenType.SEMICOLON:
+            self.advance()
+            return FunctionDeclarationNode(
+                func_name=func_name,
+                return_type=return_type,
+                arg_types=arg_types,
+                arg_names=arg_names,
+                body=None,
+            )
+
+        # Otherwise parse body in new scope
+        outer_table = self.symbol_table
+        self.symbol_table = SymbolTable(parent=outer_table)
+
+        for pname, ptype in zip(arg_names, arg_types):
+            self.symbol_table.declare(
+                name=pname, type_=ptype, is_array=(ptype == SymbolType.INT_ARRAY)
+            )
+
+        body = self.parse_block()
+
         self.symbol_table = outer_table
 
         return FunctionDeclarationNode(

@@ -36,7 +36,9 @@ def flatten_block(block: BlockNode, tempgen: TempVarGenerator) -> BlockNode:
     return BlockNode(statements=stmts)
 
 
-def flatten_lhs_expr(expr: ASTNode, tempgen: TempVarGenerator) -> Tuple[List[ASTNode], ASTNode]:
+def flatten_lhs_expr(
+    expr: ASTNode, tempgen: TempVarGenerator
+) -> Tuple[List[ASTNode], ASTNode]:
     """Flatten an expression when it's used as an lvalue (left-hand side).
 
     Unlike `flatten_expr`, this preserves `ArrayIndex` as an lvalue node
@@ -57,6 +59,43 @@ def flatten_statement(stmt: ASTNode, tempgen: TempVarGenerator):
         return flatten_block(stmt, tempgen)
     elif t == NodeType.EXPR_STMT:
         flat_stmts, expr = flatten_expr(stmt.expression, tempgen)
+        # If the expression reduces to a temporary and the last flattened
+        # statement assigns that temporary, we avoid emitting a standalone
+        # expression statement `tmp;`. If the assignment's RHS is a
+        # function call we preserve the call as an expression statement
+        # (so side effects run). Otherwise we drop the final temp
+        # assignment since its result is unused.
+        if flat_stmts and isinstance(expr, IdentifierNode):
+            last = flat_stmts[-1]
+            if (
+                isinstance(last, AssignmentNode)
+                and isinstance(last.left, IdentifierNode)
+                and last.left.name == expr.name
+            ):
+                # If the last assignment produced the temporary for this
+                # expression, drop that temporary-assignment for
+                # expression-statements: it's only needed when the
+                # assignment is used inside a larger expression. Preserve
+                # function-call side-effects by converting a trailing
+                # assignment of a FunctionCallNode into an ExpressionStatement.
+                # If only a single assignment was produced, it is the
+                # real computation and should be kept (e.g. `_tmp = a+b`).
+                # If that single assignment is actually a function call
+                # assignment, convert it into an expression statement so
+                # side-effects run. When multiple statements were produced
+                # the final one is a redundant temporary copy and should be
+                # dropped (or converted if it's a function call).
+                if len(flat_stmts) == 1:
+                    if isinstance(last.right, FunctionCallNode):
+                        return [ExpressionStatementNode(expression=last.right)]
+                    return flat_stmts
+                else:
+                    if isinstance(last.right, FunctionCallNode):
+                        return flat_stmts[:-1] + [
+                            ExpressionStatementNode(expression=last.right)
+                        ]
+                    return flat_stmts[:-1]
+
         return flat_stmts + [ExpressionStatementNode(expression=expr)]
     elif t == NodeType.ASSIGNMENT:
         # For the left-hand side of an assignment we must preserve lvalue
@@ -130,6 +169,24 @@ def flatten_expr(
     elif t == NodeType.BINARY_OP:
         stmts_left, left = flatten_expr(expr.left, tempgen)
         stmts_right, right = flatten_expr(expr.right, tempgen)
+        # If both sides are already simple (identifiers or literals) and
+        # flattening them produced no statements, there's no need to
+        # introduce a temporary; the binary operation is already in
+        # three-address form (operands are simple). Return the BinaryOp
+        # node directly with no prepended statements.
+        simple_types = (
+            NodeType.IDENTIFIER,
+            NodeType.INT_LITERAL,
+            NodeType.BOOL_LITERAL,
+        )
+        if (
+            not stmts_left
+            and not stmts_right
+            and left.type in simple_types
+            and right.type in simple_types
+        ):
+            return [], BinaryOpNode(left=left, operator=expr.operator, right=right)
+
         tmp_name = tempgen.new()
         tmp_var = IdentifierNode(name=tmp_name, symbol_type=None)
         assign = AssignmentNode(
@@ -182,7 +239,11 @@ def flatten_expr(
         tmp_name = tempgen.new()
         tmp_var = IdentifierNode(name=tmp_name, symbol_type=None)
         assign = AssignmentNode(left=left, right=right)
-        assign_tmp = AssignmentNode(left=tmp_var, right=assign)
+        # The temporary should hold the value of the right-hand side (the
+        # assigned value), not another AssignmentNode. Using `assign` as the
+        # RHS produced nested assignments like `_tmp = a = b`, which is
+        # ill-formed. Use the flattened `right` expression itself.
+        assign_tmp = AssignmentNode(left=tmp_var, right=right)
         return stmts_left + stmts_right + [assign, assign_tmp], tmp_var
     else:
         # For any other node, return as is
