@@ -17,6 +17,8 @@ This pass is intentionally simple and does not optimize instruction selection.
 
 from typing import Dict, Any, List, Optional
 from ast_nodes import *
+from liveness import analyze_liveness
+from instr_utils import instr_uses_defs as _instr_uses_defs
 
 
 # Register representation
@@ -382,8 +384,11 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             instrs.append({"op": "RET"})
 
         case FunctionDeclarationNode(func_name=name, body=body) if body is not None:
+            # Emit only a function label here. The CFG already places the
+            # function body statements into subsequent blocks; inlining the
+            # body here would duplicate instructions in the instruction-level
+            # CFG and visualization.
             instrs.append({"op": "FUNC_LABEL", "name": name})
-            instrs.extend(select_instructions_for_stmt(body))
 
         case IfStatementNode(condition=cond, then_block=then_b, else_block=else_b):
             cond_reg = EXPR_RESULT_REG
@@ -429,7 +434,13 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
 
 
 def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Given a CFG, return a new CFG with statements replaced by lists of RISC-V instructions."""
+    """Given a CFG, return a new CFG with statements replaced by lists of RISC-V instructions.
+
+    This function also computes and attaches per-block and per-statement
+    instruction-level liveness into the returned `instr_cfg["analysis"]` so
+    downstream passes (notably register allocation) can reuse it and avoid
+    recomputing a global instruction-level fixed-point.
+    """
     new_blocks = []
     for block in cfg.get("blocks", []):
         new_stmts = []
@@ -443,8 +454,77 @@ def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "out_edges": list(block.get("out_edges", [])),
             }
         )
-    return {
+
+    instr_cfg = {
         "blocks": new_blocks,
         "entry": cfg.get("entry"),
         "exit": cfg.get("exit"),
     }
+
+    # Compute CFG-level liveness (by variable name) and convert to per-statement
+    # per-instruction liveness expressed with `Register` objects. This allows
+    # `regalloc` to consume `instr_cfg["analysis"]` directly.
+    try:
+        cfg_liv = analyze_liveness(cfg)
+    except Exception:
+        cfg_liv = None
+
+    analysis: Dict[str, Dict[str, Any]] = {}
+    for b in instr_cfg.get("blocks", []):
+        lbl = b["label"]
+        stmts = b.get("statements", [])
+        # Default empty per-statement pairs
+        per_stmt_pairs: List[List[tuple]] = [ ([], []) for _ in stmts ]
+
+        if cfg_liv and lbl in cfg_liv:
+            blk_liv = cfg_liv[lbl].get("instr_liveness", [])
+            # blk_liv is a list of (live_in_names, live_out_names) per statement
+            per_stmt_pairs = []
+            for i, stmt_instrs in enumerate(stmts):
+                # get statement-level live_out (names) from CFG liveness; fall back to empty set
+                if i < len(blk_liv):
+                    stmt_li_names, stmt_lo_names = blk_liv[i]
+                else:
+                    stmt_li_names, stmt_lo_names = set(), set()
+
+                # map name-based live_out to Register objects
+                live_after = set()
+                for name in stmt_lo_names:
+                    live_after.add(temp_to_reg(name) if isinstance(name, str) else Register(str(name), is_virtual=True))
+
+                # Compute per-instruction liveness for this statement by scanning backwards
+                instr_pairs: List[tuple] = []
+                # Work on a copy since we'll mutate live_after
+                la = set(live_after)
+                for instr in reversed(stmt_instrs):
+                    uses, defs = _instr_uses_defs(instr)
+                    live_in = (la - defs) | uses
+                    live_out = la.copy()
+                    instr_pairs.append((list(live_in), list(live_out)))
+                    la = live_in
+                instr_pairs.reverse()
+                # If the statement had no instructions, still record the stmt-level pair
+                if not instr_pairs:
+                    per_stmt_pairs.append((list(live_after), list(live_after)))
+                else:
+                    # For compatibility with `build_interference` which expects a
+                    # per-statement pair (live_in of first instr, live_out of last instr)
+                    first_in = instr_pairs[0][0]
+                    last_out = instr_pairs[-1][1]
+                    per_stmt_pairs.append((first_in, last_out))
+        else:
+            # No prior liveness available: emit conservative empty pairs
+            per_stmt_pairs = [ ([], []) for _ in stmts ]
+
+        # Store in analysis: lists (so JSON-ification still works if needed)
+        # live_in/live_out for block approximate from per_stmt_pairs
+        blk_live_in = set(per_stmt_pairs[0][0]) if per_stmt_pairs else set()
+        blk_live_out = set(per_stmt_pairs[-1][1]) if per_stmt_pairs else set()
+        analysis[lbl] = {
+            "live_in": list(blk_live_in),
+            "live_out": list(blk_live_out),
+            "instr_liveness": per_stmt_pairs,
+        }
+
+    instr_cfg["analysis"] = analysis
+    return instr_cfg

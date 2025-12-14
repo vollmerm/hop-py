@@ -14,6 +14,9 @@ import json
 from typing import Optional
 from ast_json import ast_to_json
 from cfg_viz import write_and_render
+from cfg_instrsel import select_instructions
+from regalloc import build_interference, allocate_registers
+from cfg_viz import render_cfg_dot
 
 
 def lex(text: str) -> List[Token]:
@@ -42,6 +45,7 @@ def process_program(
     viz_format: str = "svg",
     viz_surface: bool = False,
     viz_include_liveness: bool = False,
+    viz_alloc: Optional[str] = None,
 ) -> None:
     """Process a single program: lex, parse, typecheck, flatten, build CFG and optionally print stages.
 
@@ -156,6 +160,54 @@ def process_program(
                     print(f"Wrote CFG visualization to {viz_path}.{viz_format}")
                 except Exception as e:
                     print(f"Failed to render CFG visualization to {viz_path}: {e}")
+
+            # Optionally run instruction selection + register allocation and
+            # render before/after allocation visualizations.
+            if viz_alloc:
+                try:
+                    instr_cfg = select_instructions(cfg)
+
+                    def _stringify_liveness(liv):
+                        if not liv:
+                            return None
+                        out = {}
+                        for lbl, info in liv.items():
+                            li = sorted([str(r) for r in info.get("live_in", set())])
+                            lo = sorted([str(r) for r in info.get("live_out", set())])
+                            instr_l = []
+                            for pair in info.get("instr_liveness", []):
+                                a, b = pair
+                                instr_l.append((sorted([str(x) for x in a]), sorted([str(x) for x in b])))
+                            out[lbl] = {"live_in": li, "live_out": lo, "instr_liveness": instr_l}
+                        return out
+
+                    ig_before, liv_before, moves = build_interference(instr_cfg)
+                    s_liv_before = _stringify_liveness(liv_before)
+                    # write dot and try render
+                    dot = render_cfg_dot(instr_cfg, liveness=s_liv_before, include_liveness=True, use_surface=viz_surface)
+                    try:
+                        write_and_render(instr_cfg, f"{viz_alloc}_before", liveness=s_liv_before, fmt=viz_format, use_surface=viz_surface, include_liveness=True)
+                        print(f"Wrote allocation-before visualization to {viz_alloc}_before.{viz_format}")
+                    except Exception:
+                        # fallback: write dot source
+                        with open(f"{viz_alloc}_before.dot", "w", encoding="utf-8") as fh:
+                            fh.write(dot.source)
+                        print(f"Wrote DOT to {viz_alloc}_before.dot (PNG render failed)")
+
+                    assign, rewritten_cfg, spilled = allocate_registers(instr_cfg)
+
+                    ig_after, liv_after, _ = build_interference(rewritten_cfg)
+                    s_liv_after = _stringify_liveness(liv_after)
+                    dot2 = render_cfg_dot(rewritten_cfg, liveness=s_liv_after, include_liveness=True, use_surface=viz_surface)
+                    try:
+                        write_and_render(rewritten_cfg, f"{viz_alloc}_after", liveness=s_liv_after, fmt=viz_format, use_surface=viz_surface, include_liveness=True)
+                        print(f"Wrote allocation-after visualization to {viz_alloc}_after.{viz_format}")
+                    except Exception:
+                        with open(f"{viz_alloc}_after.dot", "w", encoding="utf-8") as fh:
+                            fh.write(dot2.source)
+                        print(f"Wrote DOT to {viz_alloc}_after.dot (PNG render failed)")
+                except Exception as e:
+                    print(f"Failed to produce allocation visualization: {e}")
 
     except SyntaxError as e:
         print(f"Syntax Error: {e}")
@@ -290,6 +342,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Include liveness information in the CFG visualization image",
     )
+    parser.add_argument(
+        "--viz-alloc",
+        dest="viz_alloc",
+        help="Path (without extension) to write allocation visualization (before/after)",
+    )
 
     args = parser.parse_args()
 
@@ -323,6 +380,7 @@ if __name__ == "__main__":
             viz_format=args.viz_format,
             viz_surface=args.viz_surface,
             viz_include_liveness=(args.viz_liveness),
+            viz_alloc=args.viz_alloc,
         )
     else:
         parser.print_help()

@@ -46,6 +46,9 @@ def _stmt_html(stmt_str: str, live_in=None, live_out=None, highlight=False) -> s
     # Convert multiline stmt string into HTML with <br/>
     escaped = html.escape(stmt_str)
     escaped = escaped.replace("\n", "<br/>")
+    # Avoid empty FONT elements which some Graphviz versions reject
+    if not escaped.strip():
+        escaped = "&nbsp;"
     live_html = ""
     if live_in is not None or live_out is not None:
         lin = ", ".join(sorted(live_in)) if live_in else ""
@@ -82,14 +85,19 @@ def render_cfg_dot(
 
     # First pass: determine function ownership for each block. Prefer explicit
     # `function` metadata on the block (added by `build_cfg`); fall back to
-    # detecting a FunctionDeclarationNode or FUNC_LABEL inside the block.
+    # detecting a nearby `FUNC_LABEL` instruction. We walk blocks in order and
+    # propagate the most recently seen function label so that all blocks
+    # belonging to a function are grouped together even if metadata is missing.
     block_infos = []
+    current_func = None
     for b in cfg.get("blocks", []):
         lbl = b["label"]
         stmts = b.get("statements", [])
         func_name = b.get("function")
-        if not func_name:
-            # fallback detection
+        if func_name:
+            current_func = func_name
+        else:
+            # fallback detection inside instruction lists
             for s in stmts:
                 if isinstance(s, list):
                     for instr in s:
@@ -105,6 +113,11 @@ def render_cfg_dot(
                             break
                     except Exception:
                         pass
+            # if still no explicit func found, inherit the last-seen function
+            if not func_name:
+                func_name = current_func
+            else:
+                current_func = func_name
 
         block_infos.append(
             {
@@ -157,12 +170,19 @@ def render_cfg_dot(
                     live_in = sorted(list(liveness[lbl].get("live_in", [])))
                     live_out = sorted(list(liveness[lbl].get("live_out", [])))
                     # include live sets in header when liveness requested
-                    header = f"<TR><TD COLSPAN=\"999\"><B>{html.escape(lbl)}</B> &nbsp; <FONT POINT-SIZE=\"8\">in: {html.escape(', '.join(live_in))} out: {html.escape(', '.join(live_out))}</FONT></TD></TR>"
+                    if stmts:
+                        header = f"<TR><TD COLSPAN=\"999\"><B>{html.escape(lbl)}</B> &nbsp; <FONT POINT-SIZE=\"8\">in: {html.escape(', '.join(live_in))} out: {html.escape(', '.join(live_out))}</FONT></TD></TR>"
+                    else:
+                        # For empty blocks avoid large colspan which can force wide layout
+                        header = f"<TR><TD><B>{html.escape(lbl)}</B> &nbsp; <FONT POINT-SIZE=\"8\">in: {html.escape(', '.join(live_in))} out: {html.escape(', '.join(live_out))}</FONT></TD></TR>"
                 else:
                     # omit the in/out text when liveness is not included
-                    header = (
-                        f'<TR><TD COLSPAN="999"><B>{html.escape(lbl)}</B></TD></TR>'
-                    )
+                    if stmts:
+                        header = (
+                            f'<TR><TD COLSPAN="999"><B>{html.escape(lbl)}</B></TD></TR>'
+                        )
+                    else:
+                        header = f'<TR><TD><B>{html.escape(lbl)}</B></TD></TR>'
 
                 # statements row: each cell is a statement
                 cells = []
@@ -173,7 +193,31 @@ def render_cfg_dot(
                     # Statement may be a list of instruction dicts (after instrsel), a single
                     # instruction dict, or an AST node. Handle all cases.
                     if isinstance(stmt, list):
-                        stmt_str = " ; ".join(_format_instr(instr) for instr in stmt)
+                        # Emit one cell per instruction in the statement list.
+                        # This avoids concatenating multiple instructions into a
+                        # single cell and skips empty instruction lists.
+                        if not stmt:
+                            continue
+                        # For statements that are lists, we'll create multiple
+                        # cells and treat the statement-level liveness the same
+                        # for each instruction (we don't have per-instr liveness
+                        # granularity here).
+                        for instr in stmt:
+                            stmt_str = _format_instr(instr)
+                            live_in_i, live_out_i = (None, None)
+                            highlight = False
+                            if instr_l and i < len(instr_l):
+                                live_in_i, live_out_i = instr_l[i]
+                                highlight = bool(live_out_i)
+                            if not include_liveness:
+                                live_in_i = None
+                                live_out_i = None
+                                highlight = False
+                            cells.append(
+                                _stmt_html(stmt_str, live_in_i, live_out_i, highlight=highlight)
+                            )
+                        # we've handled this statement (which produced multiple cells)
+                        continue
                     elif isinstance(stmt, dict):
                         stmt_str = _format_instr(stmt)
                     else:
