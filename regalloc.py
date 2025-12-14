@@ -43,18 +43,43 @@ def build_interference(instr_cfg: Dict[str, Any]) -> Tuple[Dict[Register, Set[Re
     # reuse it and skip the expensive global fixed-point. Expected shape:
     # instr_cfg["analysis"][label] -> { 'live_in': [...], 'live_out': [...], 'instr_liveness': [ (live_in, live_out), ... ] }
     if isinstance(instr_cfg.get("analysis"), dict):
+        # When instruction selection attached `analysis`, it may contain names
+        # (strings) or Register objects. Convert names -> Register objects and
+        # ignore any unexpected items (e.g., AST nodes) to avoid leaking them
+        # into the interference analysis.
+        from cfg_instrsel import temp_to_reg
+
+        def _to_reg_set(iterable):
+            out = set()
+            for x in iterable:
+                if isinstance(x, str):
+                    out.add(temp_to_reg(x))
+                else:
+                    # already a Register-like object?
+                    try:
+                        if getattr(x, "name", None) is not None:
+                            out.add(x)
+                    except Exception:
+                        # skip unexpected types like AST nodes
+                        continue
+            return out
+
         analysis = {}
         for b in blocks:
             lbl = b["label"]
             blk = instr_cfg["analysis"].get(lbl)
             if blk and "instr_liveness" in blk:
-                # convert lists to sets if necessary
                 per_stmt = []
                 for pair in blk.get("instr_liveness", []):
-                    li, lo = pair
-                    per_stmt.append((set(li), set(lo)))
-                live_in = set(blk.get("live_in", per_stmt[0][0] if per_stmt else set()))
-                live_out = set(blk.get("live_out", per_stmt[-1][1] if per_stmt else set()))
+                    # pair expected to be (live_in, live_out) where elements are lists
+                    try:
+                        li, lo = pair
+                    except Exception:
+                        # malformed entry: skip
+                        continue
+                    per_stmt.append((_to_reg_set(li), _to_reg_set(lo)))
+                live_in = _to_reg_set(blk.get("live_in", per_stmt[0][0] if per_stmt else []))
+                live_out = _to_reg_set(blk.get("live_out", per_stmt[-1][1] if per_stmt else []))
                 analysis[lbl] = {"live_in": live_in, "live_out": live_out, "instr_liveness": per_stmt}
             else:
                 # fallback to empty structure for this block

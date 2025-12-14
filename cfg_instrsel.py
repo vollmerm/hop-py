@@ -91,15 +91,33 @@ def temp_to_reg(temp: str) -> Register:
     return Register(temp, is_virtual=True)
 
 
-# Named register used to hold expression results produced by
-# `select_instructions_for_stmt` for non-call expressions. This is a
-# symbolic placeholder (currently mapped to RISC-V `x31`) so later
-# passes (register allocation) can identify and handle it specially.
-EXPR_RESULT_REG = Register("x31")
+def _ensure_reg_for(expr, instrs: List[Dict[str, Any]]) -> Register:
+    """Ensure `expr` is evaluated into a Register and return that Register.
+
+    If `expr` is an identifier, return its mapped register. Otherwise emit
+    instructions to evaluate the expression (appending to `instrs`) and
+    return a fresh temporary register where the result will be placed.
+    """
+    if isinstance(expr, IdentifierNode):
+        return temp_to_reg(expr.name)
+    # For literals and complex expressions, evaluate them into a fresh temp and return it.
+    tmp = _fresh_tmp()
+    instrs.extend(select_instructions_for_stmt(expr, dest=tmp))
+    return tmp
 
 
-def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
-    instrs = []
+_expr_tmp_counter = 0
+
+
+def _fresh_tmp() -> Register:
+    global _expr_tmp_counter
+    name = f"v_expr{_expr_tmp_counter}"
+    _expr_tmp_counter += 1
+    return Register(name, is_virtual=True)
+
+
+def select_instructions_for_stmt(stmt, dest: Optional[Register] = None) -> List[Dict[str, Any]]:
+    instrs: List[Dict[str, Any]] = []
 
     match stmt:
         case AssignmentNode(
@@ -108,7 +126,7 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             base = (
                 temp_to_reg(arr.name)
                 if isinstance(arr, IdentifierNode)
-                else Register(str(arr), is_virtual=True)
+                else _ensure_reg_for(arr, instrs)
             )
             offset = idx.value * 4 if isinstance(idx, IntLiteralNode) else 0
             instrs.extend(select_instructions_for_stmt(fc))
@@ -121,13 +139,13 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             base = (
                 temp_to_reg(arr.name)
                 if isinstance(arr, IdentifierNode)
-                else Register(str(arr), is_virtual=True)
+                else _ensure_reg_for(arr, instrs)
             )
             offset = idx.value * 4 if isinstance(idx, IntLiteralNode) else 0
             if isinstance(right, IdentifierNode):
                 rs2 = temp_to_reg(right.name)
             else:
-                rs2 = Register(str(right), is_virtual=True)
+                rs2 = _ensure_reg_for(right, instrs)
             instrs.append({"op": "SW", "rs2": rs2, "offset": offset, "base": base})
             return instrs
 
@@ -135,10 +153,9 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rd = (
                 temp_to_reg(left.name)
                 if isinstance(left, IdentifierNode)
-                else Register(str(left), is_virtual=True)
+                else _ensure_reg_for(left, instrs)
             )
-            instrs.extend(select_instructions_for_stmt(fc))
-            instrs.append({"op": "MV", "rd": rd, "rs1": Register("a0")})
+            instrs.extend(select_instructions_for_stmt(fc, dest=rd))
             return instrs
 
         case AssignmentNode(
@@ -160,17 +177,17 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rd = (
                 temp_to_reg(left.name)
                 if isinstance(left, IdentifierNode)
-                else Register(str(left), is_virtual=True)
+                else _ensure_reg_for(left, instrs)
             )
             rs1 = (
                 temp_to_reg(rl.name)
                 if isinstance(rl, IdentifierNode)
-                else Register(str(rl), is_virtual=True)
+                else _ensure_reg_for(rl, instrs)
             )
             rs2 = (
                 temp_to_reg(rr.name)
                 if isinstance(rr, IdentifierNode)
-                else Register(str(rr), is_virtual=True)
+                else _ensure_reg_for(rr, instrs)
             )
             instrs.append({"op": opcode, "rd": rd, "rs1": rs1, "rs2": rs2})
 
@@ -178,12 +195,12 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rd = (
                 temp_to_reg(left.name)
                 if isinstance(left, IdentifierNode)
-                else Register(str(left), is_virtual=True)
+                else _ensure_reg_for(left, instrs)
             )
             rs1 = (
                 temp_to_reg(rv.name)
                 if isinstance(rv, IdentifierNode)
-                else Register(str(rv), is_virtual=True)
+                else _ensure_reg_for(rv, instrs)
             )
             instrs.append({"op": "SUB", "rd": rd, "rs1": Register("x0"), "rs2": rs1})
 
@@ -191,12 +208,12 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rd = (
                 temp_to_reg(left.name)
                 if isinstance(left, IdentifierNode)
-                else Register(str(left), is_virtual=True)
+                else _ensure_reg_for(left, instrs)
             )
             rs1 = (
                 temp_to_reg(rv.name)
                 if isinstance(rv, IdentifierNode)
-                else Register(str(rv), is_virtual=True)
+                else _ensure_reg_for(rv, instrs)
             )
             instrs.append({"op": "SEQZ", "rd": rd, "rs": rs1})
 
@@ -204,7 +221,7 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rd = (
                 temp_to_reg(left.name)
                 if isinstance(left, IdentifierNode)
-                else Register(str(left), is_virtual=True)
+                else _ensure_reg_for(left, instrs)
             )
             instrs.append({"op": "ADDI", "rd": rd, "rs1": Register("x0"), "imm": v})
 
@@ -212,7 +229,7 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rd = (
                 temp_to_reg(left.name)
                 if isinstance(left, IdentifierNode)
-                else Register(str(left), is_virtual=True)
+                else _ensure_reg_for(left, instrs)
             )
             imm = 1 if b else 0
             instrs.append({"op": "ADDI", "rd": rd, "rs1": Register("x0"), "imm": imm})
@@ -221,7 +238,7 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rd = (
                 temp_to_reg(left.name)
                 if isinstance(left, IdentifierNode)
-                else Register(str(left), is_virtual=True)
+                else _ensure_reg_for(left, instrs)
             )
             rs1 = temp_to_reg(rname)
             instrs.append({"op": "ADDI", "rd": rd, "rs1": rs1, "imm": 0})
@@ -230,12 +247,12 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rd = (
                 temp_to_reg(left.name)
                 if isinstance(left, IdentifierNode)
-                else Register(str(left), is_virtual=True)
+                else _ensure_reg_for(left, instrs)
             )
             base = (
                 temp_to_reg(arr.name)
                 if isinstance(arr, IdentifierNode)
-                else Register(str(arr), is_virtual=True)
+                else _ensure_reg_for(arr, instrs)
             )
             offset = idx.value * 4 if isinstance(idx, IntLiteralNode) else 0
             instrs.append({"op": "LW", "rd": rd, "offset": offset, "base": base})
@@ -244,11 +261,9 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rd = (
                 temp_to_reg(left.name)
                 if isinstance(left, IdentifierNode)
-                else Register(str(left), is_virtual=True)
+                else _ensure_reg_for(left, instrs)
             )
-            instrs.append(
-                {"op": "MV", "rd": rd, "rs1": Register(str(right), is_virtual=True)}
-            )
+            instrs.append({"op": "MV", "rd": rd, "rs1": _ensure_reg_for(right, instrs)})
 
         case VariableDeclarationNode(var_name=varname, init_value=None):
             # No initializer: nothing to emit for declaration alone
@@ -268,17 +283,8 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
                         {"op": "ADDI", "rd": rd, "rs1": temp_to_reg(iname), "imm": 0}
                     )
                 case _:
-                    # If the initializer is a function call, its return
-                    # value will be in `a0`; otherwise non-call expressions
-                    # place their result into `x31`.
-                    if isinstance(init, FunctionCallNode):
-                        sub = select_instructions_for_stmt(init)
-                        instrs.extend(sub)
-                        instrs.append({"op": "MV", "rd": rd, "rs1": Register("a0")})
-                    else:
-                        sub = select_instructions_for_stmt(init)
-                        instrs.extend(sub)
-                        instrs.append({"op": "MV", "rd": rd, "rs1": EXPR_RESULT_REG})
+                    # Evaluate initializer directly into the variable's register.
+                    instrs.extend(select_instructions_for_stmt(init, dest=rd))
 
         case ExpressionStatementNode(expression=expr):
             instrs.extend(select_instructions_for_stmt(expr))
@@ -299,30 +305,23 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
                             {"op": "ADDI", "rd": reg, "rs1": Register("x0"), "imm": v}
                         )
                     case _:
-                        # Evaluate the argument into `x31`, then move it into the
-                        # proper argument register. `select_instructions_for_stmt`
-                        # emits its result into `x31` for non-assign contexts.
-                        instrs.extend(select_instructions_for_stmt(arg))
-                        instrs.append({"op": "MV", "rd": reg, "rs1": EXPR_RESULT_REG})
+                        # Evaluate the argument directly into the argument register.
+                        instrs.extend(select_instructions_for_stmt(arg, dest=reg))
             fname = fn.name if isinstance(fn, IdentifierNode) else str(fn)
             instrs.append({"op": "CALL", "func": fname})
-            # Place return value into `EXPR_RESULT_REG` so callers that
-            # expect an expression result can read it there.
-            instrs.append({"op": "MV", "rd": EXPR_RESULT_REG, "rs1": Register("a0")})
+            # Handle the call result: place into `dest` or into a fresh temp.
+            if dest is None:
+                tmp = _fresh_tmp()
+                if tmp.name != "a0":
+                    instrs.append({"op": "MV", "rd": tmp, "rs1": Register("a0")})
+            else:
+                if dest.name != "a0":
+                    instrs.append({"op": "MV", "rd": dest, "rs1": Register("a0")})
+            return instrs
 
         case ReturnStatementNode(expression=expr) if expr is not None:
-            instrs.extend(select_instructions_for_stmt(expr))
-            instrs.append(
-                {
-                    "op": "MV",
-                    "rd": Register("a0"),
-                    "rs1": (
-                        EXPR_RESULT_REG
-                        if not isinstance(expr, IdentifierNode)
-                        else temp_to_reg(expr.name)
-                    ),
-                }
-            )
+            # Evaluate return expression directly into `a0`.
+            instrs.extend(select_instructions_for_stmt(expr, dest=Register("a0")))
             instrs.append({"op": "RET"})
 
         case BinaryOpNode(left=rl, operator=op, right=rr):
@@ -342,42 +341,46 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             rs1 = (
                 temp_to_reg(rl.name)
                 if isinstance(rl, IdentifierNode)
-                else Register(str(rl), is_virtual=True)
+                else _ensure_reg_for(rl, instrs)
             )
             rs2 = (
                 temp_to_reg(rr.name)
                 if isinstance(rr, IdentifierNode)
-                else Register(str(rr), is_virtual=True)
+                else _ensure_reg_for(rr, instrs)
             )
-            instrs.append({"op": opcode, "rd": EXPR_RESULT_REG, "rs1": rs1, "rs2": rs2})
+            target = dest if dest is not None else _fresh_tmp()
+            instrs.append({"op": opcode, "rd": target, "rs1": rs1, "rs2": rs2})
             return instrs
 
         case UnaryOpNode(operator="-", right=rv):
             rs1 = (
                 temp_to_reg(rv.name)
                 if isinstance(rv, IdentifierNode)
-                else Register(str(rv), is_virtual=True)
+                else _ensure_reg_for(rv, instrs)
             )
-            instrs.append({"op": "SUB", "rd": EXPR_RESULT_REG, "rs1": Register("x0"), "rs2": rs1})
+            target = dest if dest is not None else _fresh_tmp()
+            instrs.append({"op": "SUB", "rd": target, "rs1": Register("x0"), "rs2": rs1})
             return instrs
 
         case UnaryOpNode(operator="!", right=rv):
             rs1 = (
                 temp_to_reg(rv.name)
                 if isinstance(rv, IdentifierNode)
-                else Register(str(rv), is_virtual=True)
+                else _ensure_reg_for(rv, instrs)
             )
-            instrs.append({"op": "SEQZ", "rd": EXPR_RESULT_REG, "rs": rs1})
+            target = dest if dest is not None else _fresh_tmp()
+            instrs.append({"op": "SEQZ", "rd": target, "rs": rs1})
             return instrs
 
         case ArrayIndexNode(array=arr, index=idx):
             base = (
                 temp_to_reg(arr.name)
                 if isinstance(arr, IdentifierNode)
-                else Register(str(arr), is_virtual=True)
+                else _ensure_reg_for(arr, instrs)
             )
             offset = idx.value * 4 if isinstance(idx, IntLiteralNode) else 0
-            instrs.append({"op": "LW", "rd": EXPR_RESULT_REG, "offset": offset, "base": base})
+            target = dest if dest is not None else _fresh_tmp()
+            instrs.append({"op": "LW", "rd": target, "offset": offset, "base": base})
             return instrs
 
         case ReturnStatementNode():
@@ -391,8 +394,8 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
             instrs.append({"op": "FUNC_LABEL", "name": name})
 
         case IfStatementNode(condition=cond, then_block=then_b, else_block=else_b):
-            cond_reg = EXPR_RESULT_REG
-            instrs.extend(select_instructions_for_stmt(cond))
+            cond_reg = _fresh_tmp()
+            instrs.extend(select_instructions_for_stmt(cond, dest=cond_reg))
             instrs.append({"op": "BNEZ", "rs": cond_reg, "target": "then_block"})
             if else_b:
                 instrs.append(
@@ -400,8 +403,8 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
                 )
 
         case WhileStatementNode(condition=cond, body=body):
-            cond_reg = EXPR_RESULT_REG
-            instrs.extend(select_instructions_for_stmt(cond))
+            cond_reg = _fresh_tmp()
+            instrs.extend(select_instructions_for_stmt(cond, dest=cond_reg))
             instrs.append({"op": "BNEZ", "rs": cond_reg, "target": "body_block"})
             instrs.append({"op": "JAL", "rd": Register("x0"), "target": "exit_block"})
 
@@ -414,14 +417,19 @@ def select_instructions_for_stmt(stmt) -> List[Dict[str, Any]]:
                 instrs.extend(select_instructions_for_stmt(s))
 
         case IntLiteralNode(value=v):
-            instrs.append({"op": "ADDI", "rd": EXPR_RESULT_REG, "rs1": Register("x0"), "imm": v})
+            target = dest if dest is not None else _fresh_tmp()
+            instrs.append({"op": "ADDI", "rd": target, "rs1": Register("x0"), "imm": v})
 
         case BoolLiteralNode(value=b):
             imm = 1 if b else 0
-            instrs.append({"op": "ADDI", "rd": EXPR_RESULT_REG, "rs1": Register("x0"), "imm": imm})
+            target = dest if dest is not None else _fresh_tmp()
+            instrs.append({"op": "ADDI", "rd": target, "rs1": Register("x0"), "imm": imm})
 
         case IdentifierNode(name=n):
-            instrs.append({"op": "MV", "rd": EXPR_RESULT_REG, "rs1": temp_to_reg(n)})
+            # Place identifier value into `dest` or a fresh temp.
+            target = dest if dest is not None else _fresh_tmp()
+            instrs.append({"op": "ADDI", "rd": target, "rs1": temp_to_reg(n), "imm": 0})
+            return instrs
 
         case _:
             # Unknown node type: fail loudly to avoid silent compiler errors
@@ -441,12 +449,64 @@ def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
     downstream passes (notably register allocation) can reuse it and avoid
     recomputing a global instruction-level fixed-point.
     """
+    # Note: CFG-level optimizations (copy-propagation / DCE) are invoked
+    # by the driver (main) rather than inside instruction selection. This
+    # keeps the lowering pass focused and makes it easier to control when
+    # optimizations run (e.g. via CLI flags).
+
     new_blocks = []
     for block in cfg.get("blocks", []):
         new_stmts = []
-        for stmt in block.get("statements", []):
+        stmts_list = block.get("statements", [])
+        i = 0
+        while i < len(stmts_list):
+            stmt = stmts_list[i]
+            # Pattern optimization: assignment of a temp from a call followed
+            # immediately by a variable declaration that initializes from
+            # that temp. Flatten originally produces this pattern (e.g.
+            # `_tmp = call(...); var x = _tmp;`). We can avoid the extra
+            # move by emitting the call directly into the variable's register.
+            if (
+                i + 1 < len(stmts_list)
+                and isinstance(stmt, AssignmentNode)
+                and isinstance(stmt.left, IdentifierNode)
+                and stmt.left.name.startswith("_tmp")
+                and isinstance(stmt.right, FunctionCallNode)
+            ):
+                next_stmt = stmts_list[i + 1]
+                if (
+                    isinstance(next_stmt, VariableDeclarationNode)
+                    and isinstance(next_stmt.init_value, IdentifierNode)
+                    and next_stmt.init_value.name == stmt.left.name
+                ):
+                    # If the variable is returned immediately after the
+                    # declaration (`_tmp = call(...); var x = _tmp; return x;`)
+                    # we can emit the call directly into `a0` and return,
+                    # avoiding both the move into `x` and the move back into
+                    # `a0` for the return.
+                    if (
+                        i + 2 < len(stmts_list)
+                        and isinstance(stmts_list[i + 2], ReturnStatementNode)
+                        and isinstance(stmts_list[i + 2].expression, IdentifierNode)
+                        and stmts_list[i + 2].expression.name == next_stmt.var_name
+                    ):
+                        # Emit call into a0 and a RET, skip the tmp assign,
+                        # the var decl, and the return stmt.
+                        instrs = select_instructions_for_stmt(stmt.right, dest=Register("a0"))
+                        instrs.append({"op": "RET"})
+                        new_stmts.append(instrs)
+                        i += 3
+                        continue
+                    # Emit call directly into the declared variable's register.
+                    rd = temp_to_reg(next_stmt.var_name)
+                    instrs = select_instructions_for_stmt(stmt.right, dest=rd)
+                    new_stmts.append(instrs)
+                    i += 2
+                    continue
+
             instrs = select_instructions_for_stmt(stmt)
             new_stmts.append(instrs)
+            i += 1
         new_blocks.append(
             {
                 "label": block["label"],
@@ -464,6 +524,8 @@ def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # Compute CFG-level liveness (by variable name) and convert to per-statement
     # per-instruction liveness expressed with `Register` objects. This allows
     # `regalloc` to consume `instr_cfg["analysis"]` directly.
+    import warnings
+
     try:
         cfg_liv = analyze_liveness(cfg)
     except Exception:
@@ -478,6 +540,18 @@ def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
         if cfg_liv and lbl in cfg_liv:
             blk_liv = cfg_liv[lbl].get("instr_liveness", [])
+            # detect unexpected types coming from analyze_liveness (should be names/strings)
+            for entry in blk_liv:
+                try:
+                    li_names, lo_names = entry
+                except Exception:
+                    warnings.warn(f"cfg_instrsel: malformed instr_liveness entry in block {lbl}: {entry!r}")
+                    continue
+                for item in list(li_names) + list(lo_names):
+                    if not isinstance(item, str):
+                        warnings.warn(
+                            f"cfg_instrsel: analyze_liveness produced non-string liveness item in block {lbl}: {item!r} ({type(item)})"
+                        )
             # blk_liv is a list of (live_in_names, live_out_names) per statement
             per_stmt_pairs = []
             for i, stmt_instrs in enumerate(stmts):
@@ -487,10 +561,20 @@ def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     stmt_li_names, stmt_lo_names = set(), set()
 
-                # map name-based live_out to Register objects
+                # map name-based live_out to Register objects; sanitize unexpected items
                 live_after = set()
                 for name in stmt_lo_names:
-                    live_after.add(temp_to_reg(name) if isinstance(name, str) else Register(str(name), is_virtual=True))
+                    if isinstance(name, str):
+                        live_after.add(temp_to_reg(name))
+                    elif getattr(name, "name", None) is not None:
+                        # already a Register-like object
+                        live_after.add(name)
+                    else:
+                        # unexpected item (e.g. literal/AST) — warn and convert to string
+                        warnings.warn(
+                            f"cfg_instrsel: unexpected liveness item in block {lbl} stmt {i}: {name!r} ({type(name)}) — converting to str"
+                        )
+                        live_after.add(temp_to_reg(str(name)))
 
                 # Compute per-instruction liveness for this statement by scanning backwards
                 instr_pairs: List[tuple] = []

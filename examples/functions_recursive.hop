@@ -1,1 +1,11 @@
-int fact(int n) { if (n <= 1) { return 1; } else { return n * fact(n - 1); } } int f5 = fact(5);
+int fact(int n) { 
+  if (n <= 1) { 
+    return 1; 
+  } else { 
+    return n * fact(n - 1); 
+  } 
+}
+int main() {
+  int f5 = fact(5);
+  return f5;
+}

@@ -17,6 +17,7 @@ from cfg_viz import write_and_render
 from cfg_instrsel import select_instructions
 from regalloc import build_interference, allocate_registers
 from cfg_viz import render_cfg_dot
+from cfg_opt import copy_propagation_cfg, dead_code_elim
 
 
 def lex(text: str) -> List[Token]:
@@ -46,6 +47,8 @@ def process_program(
     viz_surface: bool = False,
     viz_include_liveness: bool = False,
     viz_alloc: Optional[str] = None,
+    run_optimizations: bool = False,
+    dce_level: str = "conservative",
 ) -> None:
     """Process a single program: lex, parse, typecheck, flatten, build CFG and optionally print stages.
 
@@ -85,6 +88,16 @@ def process_program(
 
         if print_cfg_flag:
             cfg = build_cfg(flat_ast)
+            # Optionally run CFG-level optimizations (copy-propagation, DCE)
+            if run_optimizations:
+                try:
+                    cfg = copy_propagation_cfg(cfg)
+                except Exception:
+                    pass
+                try:
+                    cfg = dead_code_elim(cfg, level=dce_level)
+                except Exception:
+                    pass
             liv = None
             if show_liveness:
                 liv = analyze_liveness(cfg)
@@ -347,6 +360,19 @@ if __name__ == "__main__":
         dest="viz_alloc",
         help="Path (without extension) to write allocation visualization (before/after)",
     )
+    parser.add_argument(
+        "--optimize",
+        dest="optimize",
+        action="store_true",
+        help="Run CFG-level optimizations (copy-propagation + DCE) before lowering",
+    )
+    parser.add_argument(
+        "--dce-level",
+        dest="dce_level",
+        choices=["conservative", "aggressive"],
+        default="conservative",
+        help="Aggressiveness of dead-code-elim (conservative or aggressive)",
+    )
 
     args = parser.parse_args()
 
@@ -381,6 +407,8 @@ if __name__ == "__main__":
             viz_surface=args.viz_surface,
             viz_include_liveness=(args.viz_liveness),
             viz_alloc=args.viz_alloc,
+            run_optimizations=args.optimize,
+            dce_level=args.dce_level,
         )
     else:
         parser.print_help()
