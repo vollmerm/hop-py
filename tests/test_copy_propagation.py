@@ -18,7 +18,9 @@ def test_copy_propagation_simple_copy():
         left=IdentifierNode(name="_tmp"),
         right=IdentifierNode(name="y"),
     )
-    vardecl = VariableDeclarationNode(var_name="x", init_value=IdentifierNode(name="_tmp"))
+    vardecl = VariableDeclarationNode(
+        var_name="x", init_value=IdentifierNode(name="_tmp")
+    )
     prog = ProgramNode(statements=[assign, vardecl])
     flat = flatten_program(prog)
     cfg = build_cfg(flat)

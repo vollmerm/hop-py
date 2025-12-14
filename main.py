@@ -190,33 +190,76 @@ def process_program(
                             instr_l = []
                             for pair in info.get("instr_liveness", []):
                                 a, b = pair
-                                instr_l.append((sorted([str(x) for x in a]), sorted([str(x) for x in b])))
-                            out[lbl] = {"live_in": li, "live_out": lo, "instr_liveness": instr_l}
+                                instr_l.append(
+                                    (
+                                        sorted([str(x) for x in a]),
+                                        sorted([str(x) for x in b]),
+                                    )
+                                )
+                            out[lbl] = {
+                                "live_in": li,
+                                "live_out": lo,
+                                "instr_liveness": instr_l,
+                            }
                         return out
 
                     ig_before, liv_before, moves = build_interference(instr_cfg)
                     s_liv_before = _stringify_liveness(liv_before)
                     # write dot and try render
-                    dot = render_cfg_dot(instr_cfg, liveness=s_liv_before, include_liveness=True, use_surface=viz_surface)
+                    dot = render_cfg_dot(
+                        instr_cfg,
+                        liveness=s_liv_before,
+                        include_liveness=True,
+                        use_surface=viz_surface,
+                    )
                     try:
-                        write_and_render(instr_cfg, f"{viz_alloc}_before", liveness=s_liv_before, fmt=viz_format, use_surface=viz_surface, include_liveness=True)
-                        print(f"Wrote allocation-before visualization to {viz_alloc}_before.{viz_format}")
+                        write_and_render(
+                            instr_cfg,
+                            f"{viz_alloc}_before",
+                            liveness=s_liv_before,
+                            fmt=viz_format,
+                            use_surface=viz_surface,
+                            include_liveness=True,
+                        )
+                        print(
+                            f"Wrote allocation-before visualization to {viz_alloc}_before.{viz_format}"
+                        )
                     except Exception:
                         # fallback: write dot source
-                        with open(f"{viz_alloc}_before.dot", "w", encoding="utf-8") as fh:
+                        with open(
+                            f"{viz_alloc}_before.dot", "w", encoding="utf-8"
+                        ) as fh:
                             fh.write(dot.source)
-                        print(f"Wrote DOT to {viz_alloc}_before.dot (PNG render failed)")
+                        print(
+                            f"Wrote DOT to {viz_alloc}_before.dot (PNG render failed)"
+                        )
 
                     assign, rewritten_cfg, spilled = allocate_registers(instr_cfg)
 
                     ig_after, liv_after, _ = build_interference(rewritten_cfg)
                     s_liv_after = _stringify_liveness(liv_after)
-                    dot2 = render_cfg_dot(rewritten_cfg, liveness=s_liv_after, include_liveness=True, use_surface=viz_surface)
+                    dot2 = render_cfg_dot(
+                        rewritten_cfg,
+                        liveness=s_liv_after,
+                        include_liveness=True,
+                        use_surface=viz_surface,
+                    )
                     try:
-                        write_and_render(rewritten_cfg, f"{viz_alloc}_after", liveness=s_liv_after, fmt=viz_format, use_surface=viz_surface, include_liveness=True)
-                        print(f"Wrote allocation-after visualization to {viz_alloc}_after.{viz_format}")
+                        write_and_render(
+                            rewritten_cfg,
+                            f"{viz_alloc}_after",
+                            liveness=s_liv_after,
+                            fmt=viz_format,
+                            use_surface=viz_surface,
+                            include_liveness=True,
+                        )
+                        print(
+                            f"Wrote allocation-after visualization to {viz_alloc}_after.{viz_format}"
+                        )
                     except Exception:
-                        with open(f"{viz_alloc}_after.dot", "w", encoding="utf-8") as fh:
+                        with open(
+                            f"{viz_alloc}_after.dot", "w", encoding="utf-8"
+                        ) as fh:
                             fh.write(dot2.source)
                         print(f"Wrote DOT to {viz_alloc}_after.dot (PNG render failed)")
                 except Exception as e:

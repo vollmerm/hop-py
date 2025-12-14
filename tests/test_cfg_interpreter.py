@@ -1,4 +1,5 @@
 """Tests for the CFG interpreter."""
+
 from lexer import Lexer
 from parser import Parser
 from ast_flatten import flatten_program
@@ -25,7 +26,8 @@ def test_cfg_function_call():
     env = run_cfg_src(src)
     assert env["x"] == 8
 
+
 def test_cfg_complex():
-    src = open('examples/complex.hop').read()
+    src = open("examples/complex.hop").read()
     env = run_cfg_src(src)
-    assert env.get('result') == 20
+    assert env.get("result") == 20

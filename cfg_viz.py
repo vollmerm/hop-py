@@ -182,7 +182,7 @@ def render_cfg_dot(
                             f'<TR><TD COLSPAN="999"><B>{html.escape(lbl)}</B></TD></TR>'
                         )
                     else:
-                        header = f'<TR><TD><B>{html.escape(lbl)}</B></TD></TR>'
+                        header = f"<TR><TD><B>{html.escape(lbl)}</B></TD></TR>"
 
                 # statements row: each cell is a statement
                 cells = []
@@ -214,7 +214,9 @@ def render_cfg_dot(
                                 live_out_i = None
                                 highlight = False
                             cells.append(
-                                _stmt_html(stmt_str, live_in_i, live_out_i, highlight=highlight)
+                                _stmt_html(
+                                    stmt_str, live_in_i, live_out_i, highlight=highlight
+                                )
                             )
                         # we've handled this statement (which produced multiple cells)
                         continue

@@ -26,7 +26,7 @@ def test_function_call():
 
 
 def test_complex_example():
-    src = open('examples/complex.hop').read()
+    src = open("examples/complex.hop").read()
     env = run_src(src)
     # complex.hop stores final result in `result`
-    assert env.get('result') == 20
+    assert env.get("result") == 20

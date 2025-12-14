@@ -71,9 +71,7 @@ class TypeChecker:
                 if op == "!" and expr_type == SymbolType.BOOL:
                     return SymbolType.BOOL
 
-                raise SyntaxError(
-                    f"Cannot apply unary '{op}' to type '{expr_type}'"
-                )
+                raise SyntaxError(f"Cannot apply unary '{op}' to type '{expr_type}'")
 
             case ArrayIndexNode(array=arr, index=idx):
                 array_type = TypeChecker.check_expression(arr)
@@ -100,7 +98,12 @@ class TypeChecker:
 
                 return left_type
 
-            case FunctionCallNode(function=IdentifierNode(is_function=is_func, parameters=param_types, symbol_type=ret_type) as func, arguments=args):
+            case FunctionCallNode(
+                function=IdentifierNode(
+                    is_function=is_func, parameters=param_types, symbol_type=ret_type
+                ) as func,
+                arguments=args,
+            ):
                 if not is_func:
                     raise SyntaxError(f"'{func.name}' is not a function")
 
@@ -133,17 +136,22 @@ class TypeChecker:
         expected_return: the expected return type if inside a function body, otherwise None.
         """
         match node:
-            case VariableDeclarationNode(var_name=name, var_type=vtype, init_value=init):
+            case VariableDeclarationNode(
+                var_name=name, var_type=vtype, init_value=init
+            ):
                 if init:
                     init_type = TypeChecker.check_expression(init)
                     if init_type != vtype and not (
-                        vtype == SymbolType.INT_ARRAY and init_type == SymbolType.INT_ARRAY
+                        vtype == SymbolType.INT_ARRAY
+                        and init_type == SymbolType.INT_ARRAY
                     ):
                         raise SyntaxError(
                             f"Type mismatch in initialization of '{name}': expected {vtype}, got {init_type}"
                         )
 
-            case IfStatementNode(condition=cond, then_block=then_block, else_block=else_block):
+            case IfStatementNode(
+                condition=cond, then_block=then_block, else_block=else_block
+            ):
                 cond_type = TypeChecker.check_expression(cond)
                 if cond_type != SymbolType.BOOL:
                     raise SyntaxError(f"If condition must be boolean, got {cond_type}")
@@ -155,7 +163,9 @@ class TypeChecker:
             case WhileStatementNode(condition=cond, body=body):
                 cond_type = TypeChecker.check_expression(cond)
                 if cond_type != SymbolType.BOOL:
-                    raise SyntaxError(f"While condition must be boolean, got {cond_type}")
+                    raise SyntaxError(
+                        f"While condition must be boolean, got {cond_type}"
+                    )
 
                 TypeChecker.check_statement(body, expected_return)
 
@@ -185,7 +195,9 @@ class TypeChecker:
                         f"Return type mismatch: expected {expected_return}, got {expr_type}"
                     )
 
-            case FunctionDeclarationNode(body=body, return_type=ret_type) if body is not None:
+            case FunctionDeclarationNode(body=body, return_type=ret_type) if (
+                body is not None
+            ):
                 TypeChecker.check_statement(body, ret_type)
 
             case _:

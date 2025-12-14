@@ -9,6 +9,7 @@ The interpreter returns a globals environment dict with variable names
 mapped to values and `__functions__` mapping function names to their
 FunctionDeclarationNode for inspection.
 """
+
 from typing import Any, Dict, Optional
 from ast_nodes import *
 from ast_interpreter import ReturnException
@@ -57,7 +58,11 @@ def interpret_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
                     case "*":
                         return lv * rv
                     case "/":
-                        return lv // rv if isinstance(lv, int) and isinstance(rv, int) else lv / rv
+                        return (
+                            lv // rv
+                            if isinstance(lv, int) and isinstance(rv, int)
+                            else lv / rv
+                        )
                     case "%":
                         return lv % rv
                     case "==":
@@ -111,7 +116,9 @@ def interpret_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 arrv[idxv] = rhs
                 return rhs
             case _:
-                raise RuntimeError(f"Unhandled expr node type in CFG interpreter: {node}")
+                raise RuntimeError(
+                    f"Unhandled expr node type in CFG interpreter: {node}"
+                )
 
     def exec_stmt(stmt: ASTNode, local_env: Dict[str, Any]):
         match stmt:
@@ -139,7 +146,9 @@ def interpret_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
             case ReturnStatementNode(expression=expr):
                 val = eval_expr(expr, local_env)
                 raise CFGReturn(val)
-            case IfStatementNode(condition=cond, then_block=then_block, else_block=else_block):
+            case IfStatementNode(
+                condition=cond, then_block=then_block, else_block=else_block
+            ):
                 if eval_expr(cond, local_env):
                     exec_block_local(then_block, local_env)
                 elif else_block:

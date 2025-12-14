@@ -3,6 +3,7 @@
 This module avoids importing high-level modules to prevent circular imports.
 It provides a single helper to compute uses/defs for instruction dicts.
 """
+
 from typing import Tuple, Set, Dict, Any
 
 

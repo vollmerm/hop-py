@@ -116,7 +116,9 @@ def _fresh_tmp() -> Register:
     return Register(name, is_virtual=True)
 
 
-def select_instructions_for_stmt(stmt, dest: Optional[Register] = None) -> List[Dict[str, Any]]:
+def select_instructions_for_stmt(
+    stmt, dest: Optional[Register] = None
+) -> List[Dict[str, Any]]:
     instrs: List[Dict[str, Any]] = []
 
     match stmt:
@@ -359,7 +361,9 @@ def select_instructions_for_stmt(stmt, dest: Optional[Register] = None) -> List[
                 else _ensure_reg_for(rv, instrs)
             )
             target = dest if dest is not None else _fresh_tmp()
-            instrs.append({"op": "SUB", "rd": target, "rs1": Register("x0"), "rs2": rs1})
+            instrs.append(
+                {"op": "SUB", "rd": target, "rs1": Register("x0"), "rs2": rs1}
+            )
             return instrs
 
         case UnaryOpNode(operator="!", right=rv):
@@ -423,7 +427,9 @@ def select_instructions_for_stmt(stmt, dest: Optional[Register] = None) -> List[
         case BoolLiteralNode(value=b):
             imm = 1 if b else 0
             target = dest if dest is not None else _fresh_tmp()
-            instrs.append({"op": "ADDI", "rd": target, "rs1": Register("x0"), "imm": imm})
+            instrs.append(
+                {"op": "ADDI", "rd": target, "rs1": Register("x0"), "imm": imm}
+            )
 
         case IdentifierNode(name=n):
             # Place identifier value into `dest` or a fresh temp.
@@ -492,7 +498,9 @@ def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
                     ):
                         # Emit call into a0 and a RET, skip the tmp assign,
                         # the var decl, and the return stmt.
-                        instrs = select_instructions_for_stmt(stmt.right, dest=Register("a0"))
+                        instrs = select_instructions_for_stmt(
+                            stmt.right, dest=Register("a0")
+                        )
                         instrs.append({"op": "RET"})
                         new_stmts.append(instrs)
                         i += 3
@@ -536,7 +544,7 @@ def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
         lbl = b["label"]
         stmts = b.get("statements", [])
         # Default empty per-statement pairs
-        per_stmt_pairs: List[List[tuple]] = [ ([], []) for _ in stmts ]
+        per_stmt_pairs: List[List[tuple]] = [([], []) for _ in stmts]
 
         if cfg_liv and lbl in cfg_liv:
             blk_liv = cfg_liv[lbl].get("instr_liveness", [])
@@ -545,7 +553,9 @@ def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 try:
                     li_names, lo_names = entry
                 except Exception:
-                    warnings.warn(f"cfg_instrsel: malformed instr_liveness entry in block {lbl}: {entry!r}")
+                    warnings.warn(
+                        f"cfg_instrsel: malformed instr_liveness entry in block {lbl}: {entry!r}"
+                    )
                     continue
                 for item in list(li_names) + list(lo_names):
                     if not isinstance(item, str):
@@ -598,7 +608,7 @@ def select_instructions(cfg: Dict[str, Any]) -> Dict[str, Any]:
                     per_stmt_pairs.append((first_in, last_out))
         else:
             # No prior liveness available: emit conservative empty pairs
-            per_stmt_pairs = [ ([], []) for _ in stmts ]
+            per_stmt_pairs = [([], []) for _ in stmts]
 
         # Store in analysis: lists (so JSON-ification still works if needed)
         # live_in/live_out for block approximate from per_stmt_pairs

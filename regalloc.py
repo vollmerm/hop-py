@@ -20,7 +20,13 @@ from instr_utils import instr_uses_defs as _instr_uses_defs
 # instr_uses_defs provided by instr_utils
 
 
-def build_interference(instr_cfg: Dict[str, Any]) -> Tuple[Dict[Register, Set[Register]], Dict[str, Dict[str, Any]], List[Tuple[Register, Register]]]:
+def build_interference(
+    instr_cfg: Dict[str, Any],
+) -> Tuple[
+    Dict[Register, Set[Register]],
+    Dict[str, Dict[str, Any]],
+    List[Tuple[Register, Register]],
+]:
     """Compute interference graph, instruction-level liveness, and move list.
 
     Returns (interference_graph, liveness, moves) where `liveness` maps block label
@@ -78,12 +84,24 @@ def build_interference(instr_cfg: Dict[str, Any]) -> Tuple[Dict[Register, Set[Re
                         # malformed entry: skip
                         continue
                     per_stmt.append((_to_reg_set(li), _to_reg_set(lo)))
-                live_in = _to_reg_set(blk.get("live_in", per_stmt[0][0] if per_stmt else []))
-                live_out = _to_reg_set(blk.get("live_out", per_stmt[-1][1] if per_stmt else []))
-                analysis[lbl] = {"live_in": live_in, "live_out": live_out, "instr_liveness": per_stmt}
+                live_in = _to_reg_set(
+                    blk.get("live_in", per_stmt[0][0] if per_stmt else [])
+                )
+                live_out = _to_reg_set(
+                    blk.get("live_out", per_stmt[-1][1] if per_stmt else [])
+                )
+                analysis[lbl] = {
+                    "live_in": live_in,
+                    "live_out": live_out,
+                    "instr_liveness": per_stmt,
+                }
             else:
                 # fallback to empty structure for this block
-                analysis[lbl] = {"live_in": set(), "live_out": set(), "instr_liveness": [ (set(), set()) for _ in b.get("statements", []) ]}
+                analysis[lbl] = {
+                    "live_in": set(),
+                    "live_out": set(),
+                    "instr_liveness": [(set(), set()) for _ in b.get("statements", [])],
+                }
     else:
         # initialize analysis and run a global fixed-point over instruction sequences
         analysis: Dict[str, Dict[str, Any]] = {}
@@ -91,7 +109,7 @@ def build_interference(instr_cfg: Dict[str, Any]) -> Tuple[Dict[Register, Set[Re
             analysis[b["label"]] = {
                 "live_in": set(),
                 "live_out": set(),
-                "instr_liveness": [ (set(), set()) for _ in b.get("statements", []) ],
+                "instr_liveness": [(set(), set()) for _ in b.get("statements", [])],
             }
 
         changed = True
@@ -140,11 +158,15 @@ def build_interference(instr_cfg: Dict[str, Any]) -> Tuple[Dict[Register, Set[Re
                     # the per-instr entries are in order; we want the first instr's live_in and last's live_out
                     first_live_in = instr_liv_rev[idx][0]
                     last_live_out = instr_liv_rev[idx + length - 1][1]
-                    per_stmt_liveness.append((first_live_in.copy(), last_live_out.copy()))
+                    per_stmt_liveness.append(
+                        (first_live_in.copy(), last_live_out.copy())
+                    )
                     idx += length
 
                 analysis[lbl]["instr_liveness"] = per_stmt_liveness
-                new_in = per_stmt_liveness[0][0] if per_stmt_liveness else new_out.copy()
+                new_in = (
+                    per_stmt_liveness[0][0] if per_stmt_liveness else new_out.copy()
+                )
                 analysis[lbl]["live_out"] = new_out
                 analysis[lbl]["live_in"] = new_in
 
@@ -208,7 +230,9 @@ def build_interference(instr_cfg: Dict[str, Any]) -> Tuple[Dict[Register, Set[Re
     return dict(ig), analysis, list(moves)
 
 
-def allocate_registers(instr_cfg: Dict[str, Any], phys_reg_names: List[str] = None, K: int = None):
+def allocate_registers(
+    instr_cfg: Dict[str, Any], phys_reg_names: List[str] = None, K: int = None
+):
     """Attempt to allocate registers using an iterative Briggs/George approach.
 
     Returns (assignment, rewritten_cfg, spilled) where `assignment` maps
@@ -266,7 +290,9 @@ def allocate_registers(instr_cfg: Dict[str, Any], phys_reg_names: List[str] = No
             progressed = False
 
             # Simplify: remove any non-precolored node with degree < K
-            simple_nodes = [n for n in nodes - removed - precolored if degree.get(n, 0) < K]
+            simple_nodes = [
+                n for n in nodes - removed - precolored if degree.get(n, 0) < K
+            ]
             if simple_nodes:
                 for n in simple_nodes:
                     removed.add(n)
@@ -282,7 +308,7 @@ def allocate_registers(instr_cfg: Dict[str, Any], phys_reg_names: List[str] = No
 
             # Coalesce: attempt to merge a move pair satisfying Briggs' rule
             coalesced = False
-            for (d, s) in list(move_set):
+            for d, s in list(move_set):
                 if d in removed or s in removed:
                     continue
                 ud = find(d)
@@ -347,7 +373,11 @@ def allocate_registers(instr_cfg: Dict[str, Any], phys_reg_names: List[str] = No
             if rep in assignment:
                 assignment[n] = assignment[rep]
                 continue
-            neighbor_colors = {assignment.get(find(nb)) for nb in ig.get(n, set()) if assignment.get(find(nb))}
+            neighbor_colors = {
+                assignment.get(find(nb))
+                for nb in ig.get(n, set())
+                if assignment.get(find(nb))
+            }
             avail = [r for r in phys_regs if r not in neighbor_colors]
             if avail:
                 assignment[n] = avail[0]
@@ -370,7 +400,9 @@ def allocate_registers(instr_cfg: Dict[str, Any], phys_reg_names: List[str] = No
 
         # simple spill rewriting: allocate stack slot per spilled reg and insert loads/stores
         # For each spilled register `r`, create a stack slot name and replace uses/defs
-        spill_slots: Dict[Register, str] = {r: f"spill_{abs(hash(r)) % 100000}" for r in spilled}
+        spill_slots: Dict[Register, str] = {
+            r: f"spill_{abs(hash(r)) % 100000}" for r in spilled
+        }
         current_cfg = _rewrite_spills(current_cfg, spill_slots, phys_regs)
 
     # if still spilling after iterations, return last assignment and spilled set
@@ -379,7 +411,9 @@ def allocate_registers(instr_cfg: Dict[str, Any], phys_reg_names: List[str] = No
     return assign, new_cfg, spilled
 
 
-def _apply_assignment(instr_cfg: Dict[str, Any], assignment: Dict[Register, Register]) -> Dict[str, Any]:
+def _apply_assignment(
+    instr_cfg: Dict[str, Any], assignment: Dict[Register, Register]
+) -> Dict[str, Any]:
     """Return a copy of instr_cfg with Register operands replaced by assigned physical regs (or left as-is)."""
     import copy
 
@@ -396,11 +430,16 @@ def _apply_assignment(instr_cfg: Dict[str, Any], assignment: Dict[Register, Regi
                         else:
                             instr[k] = mapped
                     elif isinstance(v, list):
-                        instr[k] = [assignment.get(x, x) if isinstance(x, Register) else x for x in v]
+                        instr[k] = [
+                            assignment.get(x, x) if isinstance(x, Register) else x
+                            for x in v
+                        ]
     return cfg_copy
 
 
-def _find_unused_phys_reg(instr_cfg: Dict[str, Any], phys_regs: List[Register]) -> Register:
+def _find_unused_phys_reg(
+    instr_cfg: Dict[str, Any], phys_regs: List[Register]
+) -> Register:
     """Return a physical Register from phys_regs that does not appear in instr_cfg.
 
     If none is unused, return the first phys_reg as a fallback.
@@ -445,7 +484,11 @@ def _find_unused_phys_reg(instr_cfg: Dict[str, Any], phys_regs: List[Register]) 
     return Register("t0"), True
 
 
-def _rewrite_spills(instr_cfg: Dict[str, Any], spill_slots: Dict[Register, str], phys_regs: List[Register]) -> Dict[str, Any]:
+def _rewrite_spills(
+    instr_cfg: Dict[str, Any],
+    spill_slots: Dict[Register, str],
+    phys_regs: List[Register],
+) -> Dict[str, Any]:
     """Rewrite instr_cfg to spill registers to memory slots and return new cfg.
 
     This is a simple rewriter that, for each instruction referencing a spilled
@@ -481,7 +524,15 @@ def _rewrite_spills(instr_cfg: Dict[str, Any], spill_slots: Dict[Register, str],
                         if isinstance(v, Register) and v.name == tmp_reg.name:
                             instr[k] = v_reserve
                         elif isinstance(v, list):
-                            instr[k] = [ (v_reserve if isinstance(x, Register) and x.name == tmp_reg.name else x) for x in v]
+                            instr[k] = [
+                                (
+                                    v_reserve
+                                    if isinstance(x, Register)
+                                    and x.name == tmp_reg.name
+                                    else x
+                                )
+                                for x in v
+                            ]
 
             stmts = b.get("statements", [])
             # Insert save at block entry if tmp_reg is live-in
@@ -510,7 +561,14 @@ def _rewrite_spills(instr_cfg: Dict[str, Any], spill_slots: Dict[Register, str],
                     if u in spill_slots:
                         slot = spill_slots[u]
                         # load into tmp_reg
-                        pre.append({"op": "LW", "rd": tmp_reg, "offset": 0, "base": Register(slot)})
+                        pre.append(
+                            {
+                                "op": "LW",
+                                "rd": tmp_reg,
+                                "offset": 0,
+                                "base": Register(slot),
+                            }
+                        )
                         # replace uses of u in instr with tmp_reg
                         for k, v in list(instr.items()):
                             if v == u:
@@ -520,7 +578,14 @@ def _rewrite_spills(instr_cfg: Dict[str, Any], spill_slots: Dict[Register, str],
                     if d in spill_slots:
                         slot = spill_slots[d]
                         # write result from tmp_reg after instr
-                        post.append({"op": "SW", "rs2": tmp_reg, "offset": 0, "base": Register(slot)})
+                        post.append(
+                            {
+                                "op": "SW",
+                                "rs2": tmp_reg,
+                                "offset": 0,
+                                "base": Register(slot),
+                            }
+                        )
                         # replace defs in instr to write to tmp_reg
                         for k, v in list(instr.items()):
                             if v == d and k == "rd":

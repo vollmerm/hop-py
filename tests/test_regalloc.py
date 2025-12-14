@@ -50,6 +50,8 @@ def test_spill_with_insufficient_physical_registers():
 
     # Allocation should produce an assignment mapping (may coalesce/alias nodes)
     assert isinstance(assign, dict)
-    assert any(getattr(k, "is_virtual", False) for k in assign.keys()), "Assignment should include at least one virtual register"
+    assert any(
+        getattr(k, "is_virtual", False) for k in assign.keys()
+    ), "Assignment should include at least one virtual register"
     # result CFG should be well-formed
     assert isinstance(new_cfg, dict) and "blocks" in new_cfg

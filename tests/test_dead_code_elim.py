@@ -14,6 +14,7 @@ have no side-effects are removed, but that side-effectful initializers
 
 from ast_nodes import *
 from ast_flatten import flatten_program
+
 """Unit tests for dead code elimination (CFG-level).
 
 These tests ensure that assignments/var-decls whose values are unused and

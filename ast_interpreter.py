@@ -7,6 +7,7 @@ It supports `ProgramNode`, `VariableDeclarationNode`, `AssignmentNode`,
 basic expressions: `BinaryOpNode`, `UnaryOpNode`, `IntLiteralNode`,
 `BoolLiteralNode`, `IdentifierNode`, and `ArrayIndexNode` (simple arrays).
 """
+
 from typing import Any, Dict, Optional
 from ast_nodes import *
 
@@ -16,7 +17,9 @@ class ReturnException(Exception):
         self.value = value
 
 
-def _eval_expr(node: ASTNode, env: Dict[str, Any], functions: Dict[str, FunctionDeclarationNode]) -> Any:
+def _eval_expr(
+    node: ASTNode, env: Dict[str, Any], functions: Dict[str, FunctionDeclarationNode]
+) -> Any:
     match node:
         case IntLiteralNode(value=v):
             return v
@@ -35,7 +38,11 @@ def _eval_expr(node: ASTNode, env: Dict[str, Any], functions: Dict[str, Function
                 case "*":
                     return lv * rv
                 case "/":
-                    return lv // rv if isinstance(lv, int) and isinstance(rv, int) else lv / rv
+                    return (
+                        lv // rv
+                        if isinstance(lv, int) and isinstance(rv, int)
+                        else lv / rv
+                    )
                 case "%":
                     return lv % rv
                 case "==":
@@ -90,7 +97,9 @@ def _eval_expr(node: ASTNode, env: Dict[str, Any], functions: Dict[str, Function
             raise RuntimeError(f"Unhandled expression node type: {node}")
 
 
-def _exec_stmt(stmt: ASTNode, env: Dict[str, Any], functions: Dict[str, FunctionDeclarationNode]):
+def _exec_stmt(
+    stmt: ASTNode, env: Dict[str, Any], functions: Dict[str, FunctionDeclarationNode]
+):
     match stmt:
         case VariableDeclarationNode(var_name=name, init_value=init):
             if init is not None:
@@ -117,7 +126,9 @@ def _exec_stmt(stmt: ASTNode, env: Dict[str, Any], functions: Dict[str, Function
         case ReturnStatementNode(expression=expr):
             val = _eval_expr(expr, env, functions)
             raise ReturnException(val)
-        case IfStatementNode(condition=cond, then_block=then_block, else_block=else_block):
+        case IfStatementNode(
+            condition=cond, then_block=then_block, else_block=else_block
+        ):
             if _eval_expr(cond, env, functions):
                 _exec_block(then_block, env, functions)
             elif else_block:
@@ -141,7 +152,9 @@ def _exec_stmt(stmt: ASTNode, env: Dict[str, Any], functions: Dict[str, Function
             raise RuntimeError(f"Unhandled statement node: {stmt}")
 
 
-def _exec_block(block: BlockNode, env: Dict[str, Any], functions: Dict[str, FunctionDeclarationNode]):
+def _exec_block(
+    block: BlockNode, env: Dict[str, Any], functions: Dict[str, FunctionDeclarationNode]
+):
     for s in block.statements:
         _exec_stmt(s, env, functions)
 

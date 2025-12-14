@@ -33,7 +33,6 @@ from ast_nodes import *
 from liveness import analyze_liveness
 
 
-
 def _compute_preds(cfg: Dict[str, any]) -> Dict[str, List[str]]:
     preds: Dict[str, List[str]] = {}
     for b in cfg.get("blocks", []):
@@ -82,7 +81,7 @@ def _replace_in_node(node: ASTNode, mapping: Dict[str, str]) -> ASTNode:
             return node
         case FunctionCallNode(function=fn, arguments=args):
             node.function = _replace_in_node(node.function, mapping)
-            node.arguments = [ _replace_in_node(a, mapping) for a in node.arguments ]
+            node.arguments = [_replace_in_node(a, mapping) for a in node.arguments]
             return node
         case AssignmentNode(left=l, right=r):
             node.left = _replace_in_node(node.left, mapping)
@@ -105,10 +104,10 @@ def _replace_in_node(node: ASTNode, mapping: Dict[str, str]) -> ASTNode:
             node.init_value = _replace_in_node(node.init_value, mapping)
             return node
         case BlockNode(statements=stmts):
-            node.statements = [ _replace_in_node(s, mapping) for s in stmts ]
+            node.statements = [_replace_in_node(s, mapping) for s in stmts]
             return node
         case ProgramNode(statements=stmts):
-            node.statements = [ _replace_in_node(s, mapping) for s in stmts ]
+            node.statements = [_replace_in_node(s, mapping) for s in stmts]
             return node
         case _:
             return node
@@ -121,12 +120,12 @@ def copy_propagation_cfg(cfg: Dict[str, any]) -> Dict[str, any]:
     This modifies the AST nodes in the blocks to replace identifier uses
     with their propagated originals where safe.
     """
-    blocks = { b["label"]: b for b in cfg.get("blocks", []) }
+    blocks = {b["label"]: b for b in cfg.get("blocks", [])}
     preds = _compute_preds(cfg)
 
     # Initialize in/out maps
-    in_map: Dict[str, Dict[str, str]] = { lbl: {} for lbl in blocks }
-    out_map: Dict[str, Dict[str, str]] = { lbl: {} for lbl in blocks }
+    in_map: Dict[str, Dict[str, str]] = {lbl: {} for lbl in blocks}
+    out_map: Dict[str, Dict[str, str]] = {lbl: {} for lbl in blocks}
 
     changed = True
     # Iterative forward dataflow
@@ -134,7 +133,7 @@ def copy_propagation_cfg(cfg: Dict[str, any]) -> Dict[str, any]:
         changed = False
         for lbl, block in blocks.items():
             # compute in as intersection of predecessors' outs
-            pred_maps = [ out_map[p] for p in preds.get(lbl, []) ]
+            pred_maps = [out_map[p] for p in preds.get(lbl, [])]
             if pred_maps:
                 new_in = _merge_maps(pred_maps)
             else:
@@ -145,35 +144,34 @@ def copy_propagation_cfg(cfg: Dict[str, any]) -> Dict[str, any]:
             # simulate block
             cur = dict(in_map[lbl])
             for stmt in block.get("statements", []):
-                # handle assignment x = y
-                if isinstance(stmt, AssignmentNode):
-                    left = stmt.left
-                    right = stmt.right
-                    if isinstance(left, IdentifierNode):
-                        lhs = left.name
-                        if isinstance(right, IdentifierNode):
-                            rhs = right.name
-                            # canonicalize rhs
-                            canonical = cur.get(rhs, rhs)
-                            cur[lhs] = canonical
-                        else:
-                            # non-copy assignment kills lhs
-                            if lhs in cur:
-                                del cur[lhs]
-                    else:
+                # handle assignment x = y and var decl patterns using structural matching
+                match stmt:
+                    case AssignmentNode(
+                        left=IdentifierNode(name=lhs), right=IdentifierNode(name=rhs)
+                    ):
+                        canonical = cur.get(rhs, rhs)
+                        cur[lhs] = canonical
+                    case AssignmentNode(left=IdentifierNode(name=lhs), right=_):
+                        # non-copy assignment kills lhs
+                        if lhs in cur:
+                            del cur[lhs]
+                    case AssignmentNode():
                         # assignment to non-simple LHS conservative: do nothing
                         pass
-                elif isinstance(stmt, VariableDeclarationNode):
-                    vn = stmt.var_name
-                    init = stmt.init_value
-                    if isinstance(init, IdentifierNode):
-                        cur[vn] = cur.get(init.name, init.name)
-                    else:
+                    case VariableDeclarationNode(
+                        var_name=vn, init_value=IdentifierNode(name=iname)
+                    ):
+                        cur[vn] = cur.get(iname, iname)
+                    case VariableDeclarationNode(var_name=vn, init_value=None):
                         if vn in cur:
                             del cur[vn]
-                else:
-                    # For other nodes we don't change the mapping
-                    pass
+                    case VariableDeclarationNode(var_name=vn):
+                        # initializer exists but not a simple identifier: kill mapping
+                        if vn in cur:
+                            del cur[vn]
+                    case _:
+                        # For other nodes we don't change the mapping
+                        pass
             if cur != out_map[lbl]:
                 out_map[lbl] = cur
                 changed = True
@@ -185,22 +183,22 @@ def copy_propagation_cfg(cfg: Dict[str, any]) -> Dict[str, any]:
         for stmt in block.get("statements", []):
             # First, rewrite uses inside the stmt according to current mapping
             new_stmt = _replace_in_node(stmt, mapping)
-            # Then update mapping as we encounter defs in this stmt
-            if isinstance(new_stmt, AssignmentNode):
-                if isinstance(new_stmt.left, IdentifierNode):
-                    lhs = new_stmt.left.name
-                    if isinstance(new_stmt.right, IdentifierNode):
-                        rhs = new_stmt.right.name
-                        mapping[lhs] = mapping.get(rhs, rhs)
-                    else:
-                        mapping.pop(lhs, None)
-            elif isinstance(new_stmt, VariableDeclarationNode):
-                vn = new_stmt.var_name
-                init = new_stmt.init_value
-                if isinstance(init, IdentifierNode):
-                    mapping[vn] = mapping.get(init.name, init.name)
-                else:
+            # Then update mapping as we encounter defs in this stmt using matching
+            match new_stmt:
+                case AssignmentNode(
+                    left=IdentifierNode(name=lhs), right=IdentifierNode(name=rhs)
+                ):
+                    mapping[lhs] = mapping.get(rhs, rhs)
+                case AssignmentNode(left=IdentifierNode(name=lhs), right=_):
+                    mapping.pop(lhs, None)
+                case VariableDeclarationNode(
+                    var_name=vn, init_value=IdentifierNode(name=iname)
+                ):
+                    mapping[vn] = mapping.get(iname, iname)
+                case VariableDeclarationNode(var_name=vn):
                     mapping.pop(vn, None)
+                case _:
+                    pass
 
             new_stmts.append(new_stmt)
         block["statements"] = new_stmts
@@ -240,38 +238,42 @@ def peephole_tmp_call_elim(cfg: Dict[str, any]) -> Dict[str, any]:
         new_stmts: List[ASTNode] = []
         while i < len(stmts):
             s = stmts[i]
-            if (
-                i + 1 < len(stmts)
-                and isinstance(s, AssignmentNode)
-                and isinstance(s.left, IdentifierNode)
-                and s.left.name.startswith("_tmp")
-                and isinstance(s.right, FunctionCallNode)
-            ):
-                next_s = stmts[i + 1]
-                if (
-                    isinstance(next_s, VariableDeclarationNode)
-                    and isinstance(next_s.init_value, IdentifierNode)
-                    and next_s.init_value.name == s.left.name
-                ):
-                    # Check for following return of that variable
-                    if (
-                        i + 2 < len(stmts)
-                        and isinstance(stmts[i + 2], ReturnStatementNode)
-                        and isinstance(stmts[i + 2].expression, IdentifierNode)
-                        and (
-                            stmts[i + 2].expression.name == next_s.var_name
-                            or stmts[i + 2].expression.name == s.left.name
-                        )
-                    ):
-                        # Replace three stmts with a return of the call
-                        new_stmts.append(ReturnStatementNode(expression=s.right))
-                        i += 3
-                        continue
-                    else:
-                        # Replace assignment+vardecl with vardecl initialized by call
-                        new_stmts.append(VariableDeclarationNode(var_name=next_s.var_name, var_type=next_s.var_type, init_value=s.right))
-                        i += 2
-                        continue
+            # match assignment of temp from call
+            match s:
+                case AssignmentNode(
+                    left=IdentifierNode(name=tmpname), right=FunctionCallNode() as fc
+                ) if tmpname.startswith("_tmp"):
+                    # lookahead for var decl that initializes from tmp
+                    if i + 1 < len(stmts):
+                        next_s = stmts[i + 1]
+                        match next_s:
+                            case VariableDeclarationNode(
+                                var_name=vn, init_value=IdentifierNode(name=iname)
+                            ) if (iname == tmpname):
+                                # check for return after that
+                                if i + 2 < len(stmts):
+                                    third = stmts[i + 2]
+                                    match third:
+                                        case ReturnStatementNode(
+                                            expression=IdentifierNode(name=rname)
+                                        ) if (rname == vn or rname == tmpname):
+                                            new_stmts.append(
+                                                ReturnStatementNode(expression=fc)
+                                            )
+                                            i += 3
+                                            continue
+                                # replace with vardecl initialized by call
+                                new_stmts.append(
+                                    VariableDeclarationNode(
+                                        var_name=vn,
+                                        var_type=next_s.var_type,
+                                        init_value=fc,
+                                    )
+                                )
+                                i += 2
+                                continue
+                case _:
+                    pass
             new_stmts.append(s)
             i += 1
         b["statements"] = new_stmts
@@ -289,20 +291,21 @@ def _collapse_vardecl_then_return(cfg: Dict[str, any]) -> Dict[str, any]:
         i = 0
         while i < len(stmts):
             s = stmts[i]
-            if (
-                isinstance(s, VariableDeclarationNode)
-                and isinstance(s.init_value, FunctionCallNode)
-                and i + 1 < len(stmts)
-                and isinstance(stmts[i + 1], ReturnStatementNode)
-                and isinstance(stmts[i + 1].expression, IdentifierNode)
-                and stmts[i + 1].expression.name == s.var_name
-            ):
-                # replace with return(call)
-                new.append(ReturnStatementNode(expression=s.init_value))
-                i += 2
-                continue
-            new.append(s)
-            i += 1
+            match s:
+                case VariableDeclarationNode(
+                    init_value=FunctionCallNode() as fc, var_name=vn
+                ) if (
+                    i + 1 < len(stmts)
+                    and isinstance(stmts[i + 1], ReturnStatementNode)
+                    and isinstance(stmts[i + 1].expression, IdentifierNode)
+                    and stmts[i + 1].expression.name == vn
+                ):
+                    new.append(ReturnStatementNode(expression=fc))
+                    i += 2
+                    continue
+                case _:
+                    new.append(s)
+                    i += 1
         b["statements"] = new
     return cfg
 
@@ -353,17 +356,25 @@ def dead_code_elim(cfg: Dict[str, any], level: str = "aggressive") -> Dict[str, 
 
             removable = False
             # Determine removability based on level and side-effects.
-            if isinstance(stmt, AssignmentNode) and isinstance(stmt.left, IdentifierNode):
+            if isinstance(stmt, AssignmentNode) and isinstance(
+                stmt.left, IdentifierNode
+            ):
                 lhs = stmt.left.name
                 rhs_node = stmt.right
                 # If RHS is an identifier that refers to a temp defined earlier,
                 # inspect its defining statement for side-effects.
-                if isinstance(rhs_node, IdentifierNode) and rhs_node.name.startswith("_tmp"):
+                if isinstance(rhs_node, IdentifierNode) and rhs_node.name.startswith(
+                    "_tmp"
+                ):
                     # search backwards for its definition in this block
                     def_rhs = None
                     for j in range(i - 1, -1, -1):
                         s2 = stmts_list[j]
-                        if isinstance(s2, AssignmentNode) and isinstance(s2.left, IdentifierNode) and s2.left.name == rhs_node.name:
+                        if (
+                            isinstance(s2, AssignmentNode)
+                            and isinstance(s2.left, IdentifierNode)
+                            and s2.left.name == rhs_node.name
+                        ):
                             def_rhs = s2.right
                             break
                     if def_rhs is not None:
@@ -378,15 +389,24 @@ def dead_code_elim(cfg: Dict[str, any], level: str = "aggressive") -> Dict[str, 
                         if lhs.startswith("_tmp") and lhs not in live_out:
                             removable = True
             # Variable declaration with init: similar policy as assignments
-            elif isinstance(stmt, VariableDeclarationNode) and stmt.init_value is not None:
+            elif (
+                isinstance(stmt, VariableDeclarationNode)
+                and stmt.init_value is not None
+            ):
                 vn = stmt.var_name
                 init_node = stmt.init_value
                 # If initializer is an identifier pointing to a temp, look for its definition
-                if isinstance(init_node, IdentifierNode) and init_node.name.startswith("_tmp"):
+                if isinstance(init_node, IdentifierNode) and init_node.name.startswith(
+                    "_tmp"
+                ):
                     def_rhs = None
                     for j in range(i - 1, -1, -1):
                         s2 = stmts_list[j]
-                        if isinstance(s2, AssignmentNode) and isinstance(s2.left, IdentifierNode) and s2.left.name == init_node.name:
+                        if (
+                            isinstance(s2, AssignmentNode)
+                            and isinstance(s2.left, IdentifierNode)
+                            and s2.left.name == init_node.name
+                        ):
                             def_rhs = s2.right
                             break
                     if def_rhs is not None:

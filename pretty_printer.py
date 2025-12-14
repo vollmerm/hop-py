@@ -170,11 +170,17 @@ class PrettyPrinter:
                 )
                 lines.append(f"{indent_str}{prefix}FunctionCall({func_name})")
                 for i, arg in enumerate(args):
-                    lines.append(PrettyPrinter.print_ast(arg, indent + 4, f"arg[{i}]: "))
+                    lines.append(
+                        PrettyPrinter.print_ast(arg, indent + 4, f"arg[{i}]: ")
+                    )
 
-            case FunctionDeclarationNode(func_name=name, arg_names=anames, arg_types=atypes, body=body):
+            case FunctionDeclarationNode(
+                func_name=name, arg_names=anames, arg_types=atypes, body=body
+            ):
                 args = ", ".join(f"{n}: {t}" for n, t in zip(anames, atypes))
-                lines.append(f"{indent_str}{prefix}FunctionDecl({name} -> {node.return_type}, params=[{args}])")
+                lines.append(
+                    f"{indent_str}{prefix}FunctionDecl({name} -> {node.return_type}, params=[{args}])"
+                )
                 if body:
                     lines.append(PrettyPrinter.print_ast(body, indent + 4, "body: "))
 
@@ -207,9 +213,13 @@ class PrettyPrinter:
             case BlockNode(statements=stmts):
                 lines.append(f"{indent_str}{prefix}Block")
                 for i, stmt in enumerate(stmts):
-                    lines.append(PrettyPrinter.print_ast(stmt, indent + 4, f"stmt[{i}]: "))
+                    lines.append(
+                        PrettyPrinter.print_ast(stmt, indent + 4, f"stmt[{i}]: ")
+                    )
 
-            case VariableDeclarationNode(var_name=vname, var_type=vtype, init_value=init):
+            case VariableDeclarationNode(
+                var_name=vname, var_type=vtype, init_value=init
+            ):
                 init_str = f" = ..." if init else ""
                 lines.append(f"{indent_str}{prefix}VarDecl({vname}: {vtype}{init_str})")
                 if init:
@@ -218,7 +228,9 @@ class PrettyPrinter:
             case ProgramNode(statements=stmts):
                 lines.append(f"{indent_str}{prefix}Program")
                 for i, stmt in enumerate(stmts):
-                    lines.append(PrettyPrinter.print_ast(stmt, indent + 4, f"stmt[{i}]: "))
+                    lines.append(
+                        PrettyPrinter.print_ast(stmt, indent + 4, f"stmt[{i}]: ")
+                    )
 
             case _:
                 lines.append(f"{indent_str}{prefix}Unknown node type: {type(node)}")
