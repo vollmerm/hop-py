@@ -150,9 +150,15 @@ def interpret_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 condition=cond, then_block=then_block, else_block=else_block
             ):
                 if eval_expr(cond, local_env):
-                    exec_block_local(then_block, local_env)
+                    if isinstance(then_block, BlockNode):
+                        exec_block_local(then_block, local_env)
+                    else:
+                        exec_stmt(then_block, local_env)
                 elif else_block:
-                    exec_block_local(else_block, local_env)
+                    if isinstance(else_block, BlockNode):
+                        exec_block_local(else_block, local_env)
+                    else:
+                        exec_stmt(else_block, local_env)
                 return None
             case WhileStatementNode(condition=cond, body=body):
                 while eval_expr(cond, local_env):
@@ -237,5 +243,18 @@ def interpret_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     # Execute top-level by starting at resolved start label
     exec_block(start)
+
+    # If a `main` function exists, execute it and capture its return value
+    # under `__return__` in the globals env for test convenience.
+    if "main" in functions:
+        entry = func_entries.get("main")
+        if entry:
+            try:
+                exec_block(entry, {})
+            except CFGReturn as r:
+                globals_env["__return__"] = r.value
+            else:
+                globals_env.setdefault("__return__", None)
+
     globals_env["__functions__"] = functions
     return globals_env

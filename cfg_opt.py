@@ -29,6 +29,7 @@ invoke the peepholes and a conservative DCE internally.
 """
 
 from typing import Dict, List, Optional, Set, Tuple
+import os
 from ast_nodes import *
 from liveness import analyze_liveness
 
@@ -120,6 +121,19 @@ def copy_propagation_cfg(cfg: Dict[str, any]) -> Dict[str, any]:
     This modifies the AST nodes in the blocks to replace identifier uses
     with their propagated originals where safe.
     """
+    # Run peepholes early on the original CFG so we collapse tmp-call
+    # patterns before copy-propagation rewrites identifiers. This avoids
+    # interactions where later rewrite steps leave uses pointing at
+    # removed temporaries.
+    try:
+        cfg = peephole_tmp_call_elim(cfg)
+    except Exception:
+        pass
+    try:
+        cfg = _collapse_vardecl_then_return(cfg)
+    except Exception:
+        pass
+
     blocks = {b["label"]: b for b in cfg.get("blocks", [])}
     preds = _compute_preds(cfg)
 
@@ -205,7 +219,9 @@ def copy_propagation_cfg(cfg: Dict[str, any]) -> Dict[str, any]:
 
     # Run a small peephole pass to eliminate tmp-call patterns produced by
     # the flattener which are safe to collapse and lead to redundant
-    # MV/ADDI sequences after lowering.
+    # MV/ADDI sequences after lowering. We do not run DCE here; DCE will
+    # be invoked by the driver after liveness is recomputed on the
+    # transformed CFG.
     try:
         cfg = peephole_tmp_call_elim(cfg)
     except Exception:
@@ -213,10 +229,6 @@ def copy_propagation_cfg(cfg: Dict[str, any]) -> Dict[str, any]:
 
     try:
         cfg = _collapse_vardecl_then_return(cfg)
-    except Exception:
-        pass
-    try:
-        cfg = dead_code_elim(cfg, level="conservative")
     except Exception:
         pass
 
@@ -310,7 +322,7 @@ def _collapse_vardecl_then_return(cfg: Dict[str, any]) -> Dict[str, any]:
     return cfg
 
 
-def dead_code_elim(cfg: Dict[str, any], level: str = "aggressive") -> Dict[str, any]:
+def dead_code_elim(cfg: Dict[str, any], level: str = "aggressive", liv: Optional[Dict[str, any]] = None) -> Dict[str, any]:
     """Dead code elimination at CFG level.
 
     level: aggressiveness of elimination. Supported values:
@@ -322,10 +334,14 @@ def dead_code_elim(cfg: Dict[str, any], level: str = "aggressive") -> Dict[str, 
     Removes assignments/var-decls whose defined variable is not live after
     the statement and whose RHS has no side-effects (function calls).
     """
-    try:
-        liv = analyze_liveness(cfg)
-    except Exception:
-        return cfg
+    debug = bool(os.getenv("HOP_DEBUG_DCE"))
+    # Allow caller to provide precomputed liveness (avoids recomputing if
+    # already available after transformations). If not provided, compute it.
+    if liv is None:
+        try:
+            liv = analyze_liveness(cfg)
+        except Exception:
+            return cfg
 
     def _has_call(n: ASTNode) -> bool:
         if n is None:
@@ -341,6 +357,59 @@ def dead_code_elim(cfg: Dict[str, any], level: str = "aggressive") -> Dict[str, 
                     if isinstance(x, ASTNode) and _has_call(x):
                         return True
         return False
+
+    def _occurs_in(node: ASTNode, name: str) -> bool:
+        if node is None:
+            return False
+        match node:
+            case IdentifierNode(name=n):
+                return n == name
+            case BinaryOpNode(left=l, right=r):
+                return _occurs_in(l, name) or _occurs_in(r, name)
+            case UnaryOpNode(right=rv):
+                return _occurs_in(rv, name)
+            case ArrayIndexNode(array=arr, index=idx):
+                return _occurs_in(arr, name) or _occurs_in(idx, name)
+            case FunctionCallNode(arguments=args, function=fn):
+                if _occurs_in(fn, name):
+                    return True
+                for a in args:
+                    if _occurs_in(a, name):
+                        return True
+                return False
+            case AssignmentNode(left=l, right=r):
+                return _occurs_in(l, name) or _occurs_in(r, name)
+            case ExpressionStatementNode(expression=expr):
+                return _occurs_in(expr, name)
+            case IfStatementNode(condition=cond, then_block=then_b, else_block=else_b):
+                if _occurs_in(cond, name):
+                    return True
+                # then/else might be BlockNode or single stmt
+                if isinstance(then_b, ASTNode) and _occurs_in(then_b, name):
+                    return True
+                if else_b and isinstance(else_b, ASTNode) and _occurs_in(else_b, name):
+                    return True
+                return False
+            case WhileStatementNode(condition=cond, body=body):
+                return _occurs_in(condition, name) or _occurs_in(body, name)
+            case ReturnStatementNode(expression=expr) if expr is not None:
+                return _occurs_in(expr, name)
+            case FunctionDeclarationNode(body=bd) if bd is not None:
+                return _occurs_in(bd, name)
+            case VariableDeclarationNode(init_value=init) if init is not None:
+                return _occurs_in(init, name)
+            case BlockNode(statements=stmts):
+                for s in stmts:
+                    if _occurs_in(s, name):
+                        return True
+                return False
+            case ProgramNode(statements=stmts):
+                for s in stmts:
+                    if _occurs_in(s, name):
+                        return True
+                return False
+            case _:
+                return False
 
     for b in cfg.get("blocks", []):
         lbl = b["label"]
@@ -381,13 +450,27 @@ def dead_code_elim(cfg: Dict[str, any], level: str = "aggressive") -> Dict[str, 
                         rhs_node = def_rhs
 
                 if not _has_call(rhs_node):
-                    if level == "aggressive":
-                        if lhs not in live_out:
-                            removable = True
-                    else:
-                        # conservative: only remove temporaries introduced by flattening
-                        if lhs.startswith("_tmp") and lhs not in live_out:
-                            removable = True
+                        # No function calls in RHS -> candidate for removal.
+                        def occurs_later(name: str) -> bool:
+                            for s2 in stmts_list[i + 1 :]:
+                                if _occurs_in(s2, name):
+                                    return True
+                            return False
+
+                        # If the temp (or lhs) occurs later textually, refuse removal.
+                        if occurs_later(lhs) or (
+                            isinstance(rhs_node, IdentifierNode) and occurs_later(rhs_node.name)
+                        ):
+                            # refuse to remove
+                            pass
+                        else:
+                            if level == "aggressive":
+                                if lhs not in live_out:
+                                    removable = True
+                            else:
+                                # conservative: only remove simple RHS temps introduced by flattening
+                                if isinstance(rhs_node, (IntLiteralNode, BoolLiteralNode, IdentifierNode)) and lhs.startswith("_tmp") and lhs not in live_out:
+                                    removable = True
             # Variable declaration with init: similar policy as assignments
             elif (
                 isinstance(stmt, VariableDeclarationNode)
@@ -413,16 +496,51 @@ def dead_code_elim(cfg: Dict[str, any], level: str = "aggressive") -> Dict[str, 
                         init_node = def_rhs
 
                 if not _has_call(init_node):
-                    if level == "aggressive":
-                        if vn not in live_out:
-                            removable = True
+                    def occurs_later(name: str) -> bool:
+                        for s2 in stmts_list[i + 1 :]:
+                            if _occurs_in(s2, name):
+                                return True
+                        return False
+
+                    if occurs_later(vn) or (
+                        isinstance(init_node, IdentifierNode) and occurs_later(init_node.name)
+                    ):
+                        # refuse to remove
+                        pass
                     else:
-                        if vn.startswith("_tmp") and vn not in live_out:
-                            removable = True
+                        if level == "aggressive":
+                            if vn not in live_out:
+                                removable = True
+                        else:
+                            # conservative: only remove simple initializer vardecls for temporaries
+                            if isinstance(init_node, (IntLiteralNode, BoolLiteralNode, IdentifierNode)) and vn.startswith("_tmp") and vn not in live_out:
+                                removable = True
 
             if removable:
+                if debug:
+                    print(f"cfg_opt.dead_code_elim: removing stmt in block {lbl} at idx {i}: {stmt}")
                 # skip stmt
                 continue
             new_stmts.append(stmt)
         b["statements"] = new_stmts
     return cfg
+
+
+def safe_optimize_cfg(cfg: Dict[str, any], *, dce_level: str = "conservative") -> Dict[str, any]:
+    """Driver: perform safe CFG-level optimizations in the following
+    order: copy-propagation (which runs peepholes), recompute liveness,
+    then dead-code-elimination using the updated liveness information.
+
+    Returns the optimized CFG (modified in-place) so callers can further
+    lower or inspect it.
+    """
+    # Run copy-propagation which also applies peepholes/collapse earlier
+    cfg2 = copy_propagation_cfg(cfg)
+    # Recompute liveness on the transformed CFG and pass into DCE for
+    # accuracy.
+    try:
+        liv = analyze_liveness(cfg2)
+    except Exception:
+        liv = None
+    cfg3 = dead_code_elim(cfg2, level=dce_level, liv=liv)
+    return cfg3

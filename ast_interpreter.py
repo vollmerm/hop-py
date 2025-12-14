@@ -130,9 +130,15 @@ def _exec_stmt(
             condition=cond, then_block=then_block, else_block=else_block
         ):
             if _eval_expr(cond, env, functions):
-                _exec_block(then_block, env, functions)
+                if isinstance(then_block, BlockNode):
+                    _exec_block(then_block, env, functions)
+                else:
+                    _exec_stmt(then_block, env, functions)
             elif else_block:
-                _exec_block(else_block, env, functions)
+                if isinstance(else_block, BlockNode):
+                    _exec_block(else_block, env, functions)
+                else:
+                    _exec_stmt(else_block, env, functions)
             return None
         case WhileStatementNode(condition=cond, body=body):
             while _eval_expr(cond, env, functions):
@@ -182,4 +188,16 @@ def interpret_program(prog: ProgramNode) -> Dict[str, Any]:
             env["__return__"] = re.value
             break
     env["__functions__"] = functions
+    # If a `main` function is present, run it automatically and store its
+    # return value under `__return__` for convenience in tests.
+    if "main" in functions:
+        fdecl = functions["main"]
+        try:
+            _exec_block(fdecl.body, {}, functions)
+        except ReturnException as re:
+            env["__return__"] = re.value
+        else:
+            # no explicit return: set to None
+            env.setdefault("__return__", None)
+
     return env
